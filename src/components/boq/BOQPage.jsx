@@ -40,7 +40,7 @@ export default function BOQPage({ boq, onSendToDocGen, onAIReview, aiBusy }) {
           <button onClick={() => onAIReview?.(rows)} disabled={aiBusy} style={{ ...btn('sky'), opacity: aiBusy ? 0.5 : 1, cursor: aiBusy ? 'not-allowed' : 'pointer' }}>
             {aiBusy ? '⏳ AI working…' : '🤖 AI Review'}
           </button>
-          <button onClick={() => onSendToDocGen?.(rows)} style={btn('green')}>→ Send to Document Generator</button>
+          <button onClick={() => onSendToDocGen?.(rows)} style={btn('green')}>→ QS Review & Export</button>
           <button onClick={clear} style={btn('outline')}>Clear</button>
         </div>
 

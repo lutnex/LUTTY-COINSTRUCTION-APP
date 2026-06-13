@@ -87,8 +87,8 @@ export function useChat({ prices = [], onUsage, onExtract } = {}) {
     abortRef.current = new AbortController()
 
     const priceCtx = prices.length
-      ? '\n\n[SAVED RATES]:\n' + prices.map(p => `${p.material}: GHS ${p.price}/${p.unit}`).join('\n')
-      : ''
+      ? '\n\n[SAVED RATES — use only when user has not supplied a price; never override user-entered rates]:\n' + prices.map(p => `${p.material}${p.specification ? ` (${p.specification})` : ''}: GHS ${p.price}/${p.unit}${p.supplier ? ` — ${p.supplier}` : ''}`).join('\n')
+      : '\n\n[PRICING RULE]: No saved rates available — ask user for every material unit price. Do not invent market prices.'
 
     const promptMode = retryCtx?.progressKey || resolvePromptMode(txt, currentAttach)
     const isBoqMode = promptMode === 'boq' || promptMode === 'drawing'
@@ -203,13 +203,14 @@ export function useChat({ prices = [], onUsage, onExtract } = {}) {
       : m
     ))
 
-    if (extract?.hasBOQ) onToast?.('success', 'BOQ detected', `${extract.boqRows.length} line items extracted`)
+    if (extract?.hasBOQ) onToast?.('success', 'BOQ detected', `${extract.boqRows.length} line items — review workflow before import`)
+    else if (extract?.requiresApproval) onToast?.('info', 'QS review required', 'Confirm measurements and supply prices before importing priced BOQ')
     else if (extract?.hasEstimate && extract.contractSum) {
       onToast?.('info', 'Estimate total detected', `GHS ${Number(extract.contractSum).toLocaleString('en')}`)
     }
 
     if (extract && (extract.hasBOQ || extract.hasEstimate || extract.hasRisks || extract.contractSum)) {
-      onExtract?.(extract)
+      if (!extract.requiresApproval) onExtract?.(extract)
     }
 
     setTimeout(scrollBottom, 50)

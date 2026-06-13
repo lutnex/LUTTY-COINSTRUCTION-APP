@@ -13,6 +13,9 @@ export const SECTION_KINDS = {
   commercial: { defaultTitle: 'Commercial Summary', kind: 'data' },
   assumptions: { defaultTitle: 'Assumptions', kind: 'richtext' },
   exclusions: { defaultTitle: 'Exclusions & Clarifications', kind: 'richtext' },
+  provisional: { defaultTitle: 'Provisional Sums', kind: 'richtext' },
+  optional_items: { defaultTitle: 'Optional Items', kind: 'richtext' },
+  client_supplied: { defaultTitle: 'Client-Supplied Items', kind: 'richtext' },
   payment_terms: { defaultTitle: 'Payment Terms', kind: 'payment' },
   notes: { defaultTitle: 'Notes', kind: 'richtext' },
   custom: { defaultTitle: 'Custom Section', kind: 'richtext' },
@@ -29,6 +32,9 @@ const DEFAULT_ORDER = [
   'commercial',
   'assumptions',
   'exclusions',
+  'provisional',
+  'optional_items',
+  'client_supplied',
   'payment_terms',
   'notes',
 ]
@@ -108,6 +114,9 @@ export function normalizeDocumentSections(input, { meta, extras } = {}) {
   const takeoff = extras?.drawingAnalysis?.takeoffNotes
   const assumptions = extras?.assumptions
   const exclusions = extras?.exclusions
+  const provisional = extras?.provisional
+  const optionalItems = extras?.optionalItems
+  const clientSuppliedItems = extras?.clientSuppliedItems
 
   return sections.map(s => {
     if (s.type === 'project_scope' && meta?.projectDescription) {
@@ -125,6 +134,15 @@ export function normalizeDocumentSections(input, { meta, extras } = {}) {
     if (s.type === 'exclusions' && exclusions?.length) {
       return { ...s, html: arrayToListHtml(exclusions), status: 'suggested', enabled: false }
     }
+    if (s.type === 'provisional' && provisional?.length) {
+      return { ...s, html: arrayToListHtml(provisional), status: 'suggested', enabled: false }
+    }
+    if (s.type === 'optional_items' && optionalItems?.length) {
+      return { ...s, html: arrayToListHtml(optionalItems.map(i => i.desc || i)), status: 'suggested', enabled: false }
+    }
+    if (s.type === 'client_supplied' && clientSuppliedItems?.length) {
+      return { ...s, html: arrayToListHtml(clientSuppliedItems.map(i => `${i.desc} (${i.qty || '—'} ${i.unit || ''})`)), status: 'suggested', enabled: false }
+    }
     return s
   })
 }
@@ -136,6 +154,9 @@ export function applyAiSuggestionsToSections(sections, extract) {
     takeoff: extract.takeoffNotes || extract.drawingAnalysis?.takeoffNotes,
     assumptions: extract.assumptions,
     exclusions: extract.exclusions,
+    provisional: extract.provisional,
+    optional_items: extract.optionalItems,
+    client_supplied: extract.clientSuppliedItems,
     project_scope: extract.projectScope || extract.projectDescription,
   }
 
@@ -143,7 +164,7 @@ export function applyAiSuggestionsToSections(sections, extract) {
     if (section.locked) return section
     const val = updates[section.type]
     if (!val) return section
-    if (section.type === 'assumptions' || section.type === 'exclusions') {
+    if (section.type === 'assumptions' || section.type === 'exclusions' || section.type === 'provisional') {
       if (!val?.length) return section
       return {
         ...section,
@@ -151,6 +172,11 @@ export function applyAiSuggestionsToSections(sections, extract) {
         status: 'suggested',
         enabled: false,
       }
+    }
+    if (section.type === 'optional_items' || section.type === 'client_supplied') {
+      if (!val?.length) return section
+      const items = val.map(i => (typeof i === 'string' ? i : `${i.desc || i.name || 'Item'}${i.qty ? ` (${i.qty} ${i.unit || ''})` : ''}`))
+      return { ...section, html: arrayToListHtml(items), status: 'suggested', enabled: false }
     }
     if (section.type === 'takeoff' && val) {
       return { ...section, html: textToHtml(val), status: 'suggested', enabled: false }

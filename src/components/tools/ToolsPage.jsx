@@ -1,8 +1,8 @@
 import { C } from '../../utils/constants.js'
 
 const TOOLS = [
-  {ico:'🏗️',t:'Full Project Estimate',d:'Complete estimate with BOQ table, commercial summary and risks. Asks mandatory checklist.',p:'Generate a complete project estimate with full BOQ in table format, commercial summary with CONTRACT SUM, and risks. Begin with the mandatory 11-point checklist.'},
-  {ico:'📋',t:'BOQ Generation',d:'Full Bill of Quantities by trade section in standard table format — ready for direct import.',p:'Generate a complete professional BOQ using master bills B1–B25. Upload drawings for automatic takeoff. Include assumptions, collections, commercial summary, and risk register.'},
+  {ico:'📋',t:'BOQ Generation',d:'Measured quantities first, then material price collection — no invented rates.',p:'Follow QS WORKFLOW Phase 1 only: output measured quantities, material list needing prices, assumptions, exclusions, and provisional items. Do NOT price until I supply unit rates.'},
+  {ico:'🏗️',t:'Full Project Estimate',d:'Professional estimate with mandatory price confirmation before final totals.',p:'Follow QS WORKFLOW. Phase 1: measurements and clarification only. Ask for each material unit price, specification, and supply type. Do not use assumed market prices.'},
   {ico:'💧',t:'Bathroom Package',d:'Waterproofing, screed, tiles, fixtures — complete bathroom estimate with BOQ table.',p:'Generate a complete bathroom construction BOQ in table format. Ask me dimensions and spec.'},
   {ico:'🔩',t:'Foundation Package',d:'Excavation, blinding, DPC, reinforcement, formwork — full foundation BOQ.',p:'Generate a complete foundation BOQ in table format. Ask me foundation type and dimensions.'},
   {ico:'🔲',t:'Roofing Package',d:'Sheets, ridge, gutters, fascia — complete roofing estimate with quantities.',p:'Generate a roofing BOQ in table format. Ask me roof type, pitch, and plan area.'},
@@ -15,11 +15,17 @@ const TOOLS = [
   {ico:'🛣️',t:'Civil Engineering',d:'Roads, drainage, earthworks, retaining walls, infrastructure.',p:'Civil engineering estimate. Ask me scope, site conditions, soil type, and location.'},
 ]
 
-export function ToolsPage({ onLaunch, aiBusy }) {
+export function ToolsPage({ onLaunch, aiBusy, onOpenMarket }) {
   return (
     <div style={{ flex:1, overflowY:'auto', padding:20 }}>
       <div style={{ fontFamily:"'Bebas Neue'", fontSize:25, letterSpacing:'2px', color:C.amber, marginBottom:3 }}>QUICK TOOLS</div>
-      <div style={{ fontSize:12.5, color:C.textDim, marginBottom:20 }}>Specialist AI workflows — every response includes workflow action buttons for PDF export and project saving.</div>
+      <div style={{ fontSize:12.5, color:C.textDim, marginBottom:20 }}>Specialist AI workflows — QS price collection, clarification, and approved export to Document Generator.</div>
+
+      <div onClick={onOpenMarket}
+        style={{ background:'linear-gradient(135deg,rgba(10,42,67,.94),rgba(30,40,56,.97))', border:`1px solid ${C.amber}`, borderRadius:10, padding:16, marginBottom:18, cursor:'pointer' }}>
+        <div style={{ fontFamily:"'Bebas Neue'", fontSize:18, color:C.amber, marginBottom:4 }}>📈 Material Market Trends</div>
+        <div style={{ fontSize:12, color:C.textDim, lineHeight:1.5 }}>View and manually enter local supplier prices by category. Live data only when you save it — never invented.</div>
+      </div>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(265px,1fr))', gap:13 }}>
         {TOOLS.map(t => (
           <div key={t.t} onClick={() => !aiBusy && onLaunch(t.p)}

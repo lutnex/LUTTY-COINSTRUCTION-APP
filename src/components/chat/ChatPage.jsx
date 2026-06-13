@@ -4,7 +4,7 @@ import { renderMd } from '../../utils/formatters.js'
 import WorkflowPanel from './WorkflowPanel.jsx'
 import { useToast } from '../../context/ToastContext.jsx'
 
-export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, onPDFExport, onSaveToProject, projState, dispatch, setTab }) {
+export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, onOpenQSWorkflow, onPDFExport, onSaveToProject, projState, dispatch, setTab }) {
   const toast = useToast()
   const { msgs, inp, setInp, busy, progressLabel, attempt, attach, imgPrev, fileLoading, endRef, taRef, fileRef, send, stop, clear, handleFile, setAttach, setImgPrev } = chat
 
@@ -105,6 +105,7 @@ export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, on
                   extract={m.extract}
                   onImportBOQ={onImportBOQ}
                   onSendToDocGen={onSendToDocGen}
+                  onOpenQSWorkflow={onOpenQSWorkflow}
                   onPDFExport={onPDFExport}
                   onSaveToProject={onSaveToProject}
                   projState={projState}

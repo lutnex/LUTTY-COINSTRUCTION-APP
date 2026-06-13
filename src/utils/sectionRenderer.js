@@ -32,20 +32,41 @@ function richSectionHtml(title, html) {
 }
 
 function buildBoqHtml(d) {
-  if (!d.boqRows?.length) return ''
+  if (!d.boqRows?.length && !d.boqCategorySummaries?.length) return ''
+
+  if (d.presentationStyle === 'premium' && d.boqCategorySummaries?.length) {
+    const rows = d.boqCategorySummaries.map(g => `<tr>
+      <td><strong>${esc(g.section)}</strong><br><span style="font-size:11px;color:#6E84A3">${esc(g.summaryDesc)}</span></td>
+      <td class="num"><strong>${ghs(g.subtotal)}</strong></td></tr>`).join('')
+    return `<section class="export-section"><h2 class="sec">Premium Quotation Summary</h2>
+      <table class="data"><thead><tr><th>Category</th><th>Amount (GHS)</th></tr></thead><tbody>${rows}</tbody></table></section>`
+  }
+
   let rows = ''
   let cs = ''
-  for (const r of d.boqRows) {
+  const visible = d.boqRows.filter(r => !r.hideInPremium && r.supplyType !== 'excluded' && !r.excluded)
+  for (const r of visible) {
     if (r.section && r.section !== cs) {
       cs = r.section
-      rows += `<tr class="section-row"><td colspan="5">${esc(cs.toUpperCase())}</td></tr>`
+      rows += `<tr class="section-row"><td colspan="6">${esc(cs.toUpperCase())}</td></tr>`
     }
-    rows += `<tr><td>${esc(r.desc)}</td><td>${esc(r.unit)}</td><td class="num">${esc(r.qty || '—')}</td>
+    const spec = r.specification ? `<br><span style="font-size:11px;color:#6E84A3">${esc(r.specification)}</span>` : ''
+    const flags = [
+      r.clientSupplied || r.supplyType === 'client-supplied' ? 'CLIENT SUPPLY' : null,
+      r.supplyType === 'provisional' || r.provisional ? 'PROVISIONAL' : null,
+      r.supplyType === 'optional' || r.optional ? 'OPTIONAL' : null,
+      r.priceSource === 'assumption' ? 'ASSUMPTION' : null,
+    ].filter(Boolean).join(' · ')
+    rows += `<tr>
+      <td>${esc(r.desc)}${spec}${flags ? `<br><em style="font-size:10px">${esc(flags)}</em>` : ''}</td>
+      <td>${esc(r.unit)}</td>
+      <td class="num">${esc(r.qty || '—')}</td>
       <td class="num">${r.clientSupplied ? '—' : ghs(r.rate)}</td>
-      <td class="num ${r.clientSupplied ? 'client' : ''}">${r.clientSupplied ? 'CLIENT SUPPLY' : ghs(r.amount)}</td></tr>`
+      <td class="num ${r.clientSupplied ? 'client' : ''}">${r.clientSupplied ? 'CLIENT SUPPLY' : ghs(r.amount)}</td>
+      <td>${esc(r.itemRef || '')}</td></tr>`
   }
   return `<section class="export-section"><h2 class="sec">Bill of Quantities</h2>
-    <table class="data"><thead><tr><th>Description</th><th>Unit</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table></section>`
+    <table class="data"><thead><tr><th>Description</th><th>Unit</th><th>Qty</th><th>Rate</th><th>Amount</th><th>Ref</th></tr></thead><tbody>${rows}</tbody></table></section>`
 }
 
 function buildMaterialsHtml(d, title) {
@@ -121,6 +142,9 @@ export function renderSectionHtml(section, d, { grand, audit } = {}) {
     case 'takeoff':
     case 'assumptions':
     case 'exclusions':
+    case 'provisional':
+    case 'optional_items':
+    case 'client_supplied':
     case 'notes':
     case 'custom':
       return richSectionHtml(title, section.html)
@@ -152,6 +176,9 @@ export function renderSectionPlainText(section, d, { grand, audit } = {}) {
     case 'takeoff':
     case 'assumptions':
     case 'exclusions':
+    case 'provisional':
+    case 'optional_items':
+    case 'client_supplied':
     case 'notes':
     case 'custom':
       return stripHtml(section.html) ? `${title}\n${stripHtml(section.html)}` : ''

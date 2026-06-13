@@ -14,6 +14,8 @@ import { RisksPage } from './components/tools/RisksPage.jsx'
 import { PricesPage } from './components/tools/PricesPage.jsx'
 import { CalcsPage } from './components/tools/CalcsPage.jsx'
 import { ToolsPage } from './components/tools/ToolsPage.jsx'
+import MarketTrendsPage from './components/tools/MarketTrendsPage.jsx'
+import QSExportWorkflow from './components/boq/QSExportWorkflow.jsx'
 import { useChat } from './hooks/useChat.js'
 import { useAIHealth } from './hooks/useAIHealth.js'
 import { useAIUsage } from './hooks/useAIUsage.js'
@@ -21,7 +23,9 @@ import { useBOQ } from './hooks/useBOQ.js'
 import { useDocGen } from './hooks/useDocGen.js'
 import { buildBOQReviewPrompt, normalizePromptInput } from './utils/promptBuilder.js'
 import { serializeBOQ, saveDocGenDraft } from './utils/boqWorkflow.js'
-import { mergeExtractIntoProjectData } from './utils/projectIntelligence.js'
+import { mergeExtractIntoProjectData, projectDataToDocPayload } from './utils/projectIntelligence.js'
+import { applyPresentationStyle } from './utils/qsWorkflow.js'
+import { loadPriceProfiles, savePriceProfiles } from './utils/priceStore.js'
 import { downloadPDF, printDocument, buildDocumentHTML } from './services/ai/pdfEngine.js'
 import { useCompanyLogo } from './hooks/useCompanyLogo.js'
 import { DEFAULT_PRICES, DEFAULT_RISKS, DEFAULT_PROC, C } from './utils/constants.js'
@@ -62,7 +66,9 @@ function AppShellInner({ projState, dispatch }) {
   const intelligence = useProjectIntelligence()
 
   const [tab,        setTab]        = useState('chat')
-  const [prices,     setPrices]     = useState(DEFAULT_PRICES)
+  const [prices,     setPrices]     = useState(() => loadPriceProfiles())
+  const [qsWorkflowOpen, setQsWorkflowOpen] = useState(false)
+  const [qsWorkflowData, setQsWorkflowData] = useState(null)
   const [risks,      setRisks]      = useState(DEFAULT_RISKS)
   const [proc,       setProc]       = useState(DEFAULT_PROC)
   const [pdfStatus,  setPdfStatus]  = useState(null)
@@ -232,8 +238,66 @@ function AppShellInner({ projState, dispatch }) {
   }, [aiUsage])
 
   const handleAIExtract = useCallback((extract) => {
+    if (extract?.requiresApproval) return
     intelligence.mergeFromExtract(extract)
   }, [intelligence])
+
+  const handleOpenQSWorkflow = useCallback((source) => {
+    const merged = source?.boqRows
+      ? mergeExtractIntoProjectData(intelligence.data, source)
+      : { ...intelligence.data, boqItems: source || intelligence.data.boqItems }
+    setQsWorkflowData(merged)
+    setQsWorkflowOpen(true)
+  }, [intelligence])
+
+  const handleQSExport = useCallback(({ presentationStyle, priceInputs, rows, assumptions, exclusions, workflowMeta }) => {
+    const tid = toast.loading('Exporting to Document Generator…')
+    try {
+      const merged = mergeExtractIntoProjectData(intelligence.data, {
+        boqRows: rows,
+        assumptions,
+        exclusions,
+        userApprovedPricing: true,
+      }, { replaceBoq: true })
+      merged.workflow = { presentationStyle, approvedAt: new Date().toISOString(), ...workflowMeta }
+      intelligence.setData(intelligence.recomputePricing(merged))
+      let payload = projectDataToDocPayload(merged, {
+        docType: rows?.length ? 'boq' : 'estimate',
+        source: 'qs-workflow',
+      })
+      payload = applyPresentationStyle(payload, presentationStyle)
+      saveDocGenDraft(payload)
+      const ok = docGen.applyBOQTransfer(payload)
+      if (!ok) throw new Error('Transfer failed')
+      setQsWorkflowOpen(false)
+      setTab('docgen')
+      toast.done(tid, 'Approved export sent to Document Generator', `${rows.length} items · ${presentationStyle === 'premium' ? 'Premium Quotation' : 'Detailed BOQ'}`)
+    } catch (e) {
+      toast.fail(tid, 'Export failed', e.message)
+    }
+  }, [docGen, intelligence, toast])
+
+  const handleSaveWorkflowPrices = useCallback((priceInputs = []) => {
+    const next = [...prices]
+    for (const input of priceInputs) {
+      if (!input.unitPrice) continue
+      const idx = next.findIndex(p => p.material === input.material && (p.specification || '') === (input.specification || ''))
+      const row = {
+        id: idx >= 0 ? next[idx].id : Date.now() + Math.random(),
+        material: input.material,
+        specification: input.specification || '',
+        unit: input.unit || 'nr',
+        price: String(input.unitPrice),
+        supplier: input.supplier || '',
+        lastUpdated: new Date().toISOString().slice(0, 10),
+        source: 'user',
+      }
+      if (idx >= 0) next[idx] = { ...next[idx], ...row }
+      else next.push(row)
+    }
+    setPrices(next)
+    savePriceProfiles(next)
+  }, [prices])
 
   const chat = useChat({ prices, onUsage: handleUsage, onExtract: handleAIExtract })
 
@@ -260,45 +324,19 @@ function AppShellInner({ projState, dispatch }) {
     })
   }, [intelligence, toast])
 
-  // ── Send extract data to DocGen (from AI chat) ───────────────────────────
   const handleSendToDocGen = useCallback((extract) => {
-    const tid = toast.loading('Sending BOQ to Document Generator…')
-    intelligence.mergeFromExtract(extract)
-    const payload = intelligence.getDocGenPayload({
-      docType: extract.boqRows?.length ? 'boq' : 'estimate',
-      source: 'ai-chat',
-    })
-    if (!payload) {
-      toast.fail(tid, 'Transfer failed', 'No document data available')
-      return
-    }
-    saveDocGenDraft(payload)
-    docGen.applyBOQTransfer(payload)
-    setTab('docgen')
-    toast.done(tid, 'Data sent to Document Generator', `${payload.boqRows?.length || payload.materials?.length || 0} items ready`)
-  }, [docGen, intelligence, toast])
+    handleOpenQSWorkflow(extract)
+  }, [handleOpenQSWorkflow])
 
-  // ── BOQ Builder → Document Generator ─────────────────────────────────────
+  // ── BOQ Builder → QS workflow → Document Generator ───────────────────────
   const handleBOQToDocGen = useCallback(async (rows) => {
     if (!rows?.length) {
-      toast.warn('No BOQ items', 'Add at least one line item before sending to Document Generator')
+      toast.warn('No BOQ items', 'Add at least one line item before export')
       return
     }
-    const tid = toast.loading('Sending BOQ to Document Generator…')
-    try {
-      const activeProject = projState.projects.find(p => p.id === projState.activeId)
-      intelligence.setBoqItems(rows)
-      const payload = intelligence.getDocGenPayload({ docType: 'boq', source: 'boq-builder' })
-        || serializeBOQ(rows, { project: activeProject, totals: { ...boq.totals, financialAdjustments: docGen.financialAdjustments } })
-      saveDocGenDraft(payload)
-      const ok = docGen.applyBOQTransfer(payload)
-      if (!ok) throw new Error('Transfer failed — no valid BOQ data')
-      setTab('docgen')
-      toast.done(tid, 'BOQ transferred successfully', `${rows.length} items · ${activeProject?.name || payload.meta.projectTitle}`)
-    } catch (e) {
-      toast.fail(tid, 'BOQ transfer failed', e.message)
-    }
-  }, [boq.totals, docGen, intelligence, projState, toast])
+    intelligence.setBoqItems(rows)
+    handleOpenQSWorkflow({ boqRows: rows, ...intelligence.data, boqItems: rows })
+  }, [handleOpenQSWorkflow, intelligence, toast])
 
   // ── PDF export from AI extract ────────────────────────────────────────────
   const handleSaveToProject = useCallback(async (extract, projectId) => {
@@ -551,6 +589,7 @@ function AppShellInner({ projState, dispatch }) {
             prices={prices}
             onImportBOQ={handleImportBOQ}
             onSendToDocGen={handleSendToDocGen}
+            onOpenQSWorkflow={handleOpenQSWorkflow}
             onPDFExport={handlePDFExport}
             onSaveToProject={handleSaveToProject}
             projState={projState}
@@ -662,7 +701,7 @@ function AppShellInner({ projState, dispatch }) {
         {tab === 'prices' && (
           <PricesPage
             prices={prices}
-            setPrices={setPrices}
+            setPrices={(next) => { setPrices(next); savePriceProfiles(next) }}
             onAIAnalyze={(txt) => firePrompt(txt)}
             aiBusy={chat.busy}
           />
@@ -673,7 +712,11 @@ function AppShellInner({ projState, dispatch }) {
         )}
 
         {tab === 'tools' && (
-          <ToolsPage onLaunch={(prompt) => firePrompt(prompt)} aiBusy={chat.busy} />
+          <ToolsPage onLaunch={(prompt) => firePrompt(prompt)} aiBusy={chat.busy} onOpenMarket={() => setTab('market')} />
+        )}
+
+        {tab === 'market' && (
+          <MarketTrendsPage prices={prices} onPricesChange={(next) => { setPrices(next); savePriceProfiles(next) }} />
         )}
 
         {tab === 'settings' && (
@@ -683,6 +726,15 @@ function AppShellInner({ projState, dispatch }) {
           />
         )}
       </main>
+
+      <QSExportWorkflow
+        open={qsWorkflowOpen}
+        onClose={() => setQsWorkflowOpen(false)}
+        data={qsWorkflowData}
+        savedPrices={prices}
+        onSavePrices={handleSaveWorkflowPrices}
+        onExport={handleQSExport}
+      />
     </div>
   )
 }

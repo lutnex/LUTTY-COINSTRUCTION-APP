@@ -66,7 +66,8 @@ export function useDocGen(estimatePreferences = null) {
   const [busy,    setBusy]            = useState(false)
   const [transferSource, setTransferSource] = useState(null)
   const [extras, setExtras]           = useState({
-    assumptions: [], exclusions: [], drawingAnalysis: {}, risks: [], pricing: null,
+    assumptions: [], exclusions: [], provisional: [], optionalItems: [], clientSuppliedItems: [],
+    drawingAnalysis: {}, risks: [], pricing: null, workflow: null, presentationStyle: null, boqCategorySummaries: null,
   })
   const [documentSections, setDocumentSectionsRaw] = useState(() => createDefaultSectionLayout())
   const [lastAutoSaved, setLastAutoSaved] = useState(null)
@@ -133,10 +134,13 @@ export function useDocGen(estimatePreferences = null) {
 
   const setIntelligenceExtras = useCallback((patch) => {
     setExtras(e => ({ ...e, ...patch }))
-    if (patch.assumptions || patch.exclusions || patch.drawingAnalysis) {
+    if (patch.assumptions || patch.exclusions || patch.provisional || patch.optionalItems || patch.clientSuppliedItems || patch.drawingAnalysis) {
       setDocumentSectionsRaw(prev => applyAiSuggestionsToSections(prev, {
         assumptions: patch.assumptions,
         exclusions: patch.exclusions,
+        provisional: patch.provisional,
+        optionalItems: patch.optionalItems,
+        clientSuppliedItems: patch.clientSuppliedItems,
         takeoffNotes: patch.drawingAnalysis?.takeoffNotes,
       }))
     }
@@ -291,9 +295,15 @@ export function useDocGen(estimatePreferences = null) {
     setExtras({
       assumptions: extract.assumptions || [],
       exclusions: extract.exclusions || [],
+      provisional: extract.provisional || [],
+      optionalItems: [],
+      clientSuppliedItems: [],
       drawingAnalysis: { takeoffNotes: extract.takeoffNotes || '' },
       risks: extract.risks || [],
       pricing: extract.pricing || null,
+      workflow: null,
+      presentationStyle: null,
+      boqCategorySummaries: null,
     })
     setDocumentSectionsRaw(prev => applyAiSuggestionsToSections(prev, extract))
   }, [])
@@ -460,12 +470,18 @@ export function useDocGen(estimatePreferences = null) {
       boqRows: boqRows.length ? boqRows : [],
       assumptions: legacy.assumptions,
       exclusions: legacy.exclusions,
+      provisional: extras.provisional || [],
+      optionalItems: extras.optionalItems || [],
+      clientSuppliedItems: extras.clientSuppliedItems || [],
       drawingAnalysis: legacy.drawingAnalysis,
       risks: extras.risks,
       pricing,
       financialAdjustments,
       contractSum: pricing.layers.finalEstimate,
       documentSections,
+      presentationStyle: extras.presentationStyle,
+      boqCategorySummaries: extras.boqCategorySummaries,
+      workflow: extras.workflow,
     }
   }, [docType, meta, mats, matCategories, labor, prelims, boqRows, extras, pricing, financialAdjustments, documentSections])
 

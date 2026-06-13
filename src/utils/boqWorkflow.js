@@ -130,9 +130,15 @@ export function hydrateBOQDocument(docGen, payload) {
   docGen.setIntelligenceExtras?.({
     assumptions: payload.assumptions || [],
     exclusions: payload.exclusions || [],
+    provisional: payload.provisional || [],
+    optionalItems: payload.optionalItems || [],
+    clientSuppliedItems: payload.clientSuppliedItems || [],
     drawingAnalysis: payload.drawingAnalysis || {},
     risks: payload.risks || [],
     pricing: payload.pricing || null,
+    workflow: payload.workflow || null,
+    presentationStyle: payload.presentationStyle || null,
+    boqCategorySummaries: payload.boqCategorySummaries || null,
   })
 
   return true
@@ -181,9 +187,15 @@ export function persistDocGenState(docGen) {
     financialAdjustments: docGen.financialAdjustments,
     assumptions: docGen.extras?.assumptions,
     exclusions: docGen.extras?.exclusions,
+    provisional: docGen.extras?.provisional,
+    optionalItems: docGen.extras?.optionalItems,
+    clientSuppliedItems: docGen.extras?.clientSuppliedItems,
     drawingAnalysis: docGen.extras?.drawingAnalysis,
     risks: docGen.extras?.risks,
     pricing: docGen.extras?.pricing,
+    workflow: docGen.extras?.workflow,
+    presentationStyle: docGen.extras?.presentationStyle,
+    boqCategorySummaries: docGen.extras?.boqCategorySummaries,
     documentSections: docGen.documentSections,
     preview: docGen.preview,
   }

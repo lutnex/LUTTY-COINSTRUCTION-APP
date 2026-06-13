@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { C } from '../../utils/constants.js'
 import { useToast } from '../../context/ToastContext.jsx'
 
-export default function WorkflowPanel({ extract, onImportBOQ, onSendToDocGen, onPDFExport, onSaveToProject, projState, dispatch, setTab }) {
+export default function WorkflowPanel({ extract, onImportBOQ, onSendToDocGen, onOpenQSWorkflow, onPDFExport, onSaveToProject, projState, dispatch, setTab }) {
   const toast = useToast()
   const [saving,  setSaving]  = useState(false)
   const [pdfBusy, setPdfBusy] = useState(false)
@@ -81,6 +81,12 @@ export default function WorkflowPanel({ extract, onImportBOQ, onSendToDocGen, on
         )}
       </div>
 
+        {extract.requiresApproval && (
+          <div style={{ fontSize: 11, color: C_local.amber, marginBottom: 8 }}>
+            QS workflow: confirm measurements and supply prices before importing priced BOQ.
+          </div>
+        )}
+
       {/* Actions */}
       <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
         {extract.hasBOQ && (
@@ -88,11 +94,11 @@ export default function WorkflowPanel({ extract, onImportBOQ, onSendToDocGen, on
             style={wBtn('green')}>📋 Import to BOQ</button>
         )}
         {(extract.hasEstimate || extract.hasBOQ) && (
-          <button onClick={() => { onSendToDocGen?.(extract); setTab?.('docgen') }}
-            style={wBtn('amber')}>📄 Create Estimate</button>
+          <button onClick={() => { (onOpenQSWorkflow || onSendToDocGen)?.(extract) }}
+            style={wBtn('amber')}>📄 QS Review & Export</button>
         )}
-        <button onClick={() => { onSendToDocGen?.(extract); setTab?.('docgen') }}
-          style={wBtn('sky')}>🖨️ Send to DocGen</button>
+        <button onClick={() => { (onOpenQSWorkflow || onSendToDocGen)?.(extract) }}
+          style={wBtn('sky')}>🖨️ Send to DocGen (QS Workflow)</button>
         <button onClick={() => void handleSaveProject()} disabled={saving}
           style={{ ...wBtn('purple'), opacity: saving ? .7 : 1, cursor: saving ? 'not-allowed' : 'pointer' }}>
           {saving ? <>

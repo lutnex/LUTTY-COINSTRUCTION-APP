@@ -3,6 +3,7 @@
  */
 
 import { inferMaterialCategory, normalizeMaterialState } from '../../utils/materialCategories.js'
+import { detectWorkflowPhaseFromText, PRICE_SOURCES, shouldHoldAutoMerge } from '../../utils/qsWorkflow.js'
 
 function parseTableRows(tableBlock, defaultSection = 'General') {
   const rows = []
@@ -50,11 +51,14 @@ function parseTableRows(tableBlock, defaultSection = 'General') {
       itemRef: get(refI) || '',
       section: inferMaterialCategory(desc, get(secI) || defaultSection),
       desc,
+      specification: /\[ASSUMPTION/i.test(desc) ? desc : '',
       unit: get(unitI) || 'nr',
       qty: q,
       rate: r,
       amount: amt,
       clientSupplied: /client|pc sum|prime cost/i.test(row),
+      priceSource: r ? (/saved rate|user price|confirmed/i.test(row) ? PRICE_SOURCES.USER : PRICE_SOURCES.ASSUMPTION) : PRICE_SOURCES.PENDING,
+      priceConfirmed: /confirmed|user price|saved rate/i.test(row),
     })
   }
   return rows
@@ -238,7 +242,8 @@ export function parseAIResponse(text) {
     [],
   )
 
-  return {
+  const workflowPhase = detectWorkflowPhaseFromText(text)
+  const result = {
     boqRows,
     materials: categorized.materials,
     matCategories: categorized.categories,
@@ -256,7 +261,11 @@ export function parseAIResponse(text) {
     hasBOQ,
     hasRisks,
     confidence,
+    workflowPhase,
+    requiresApproval: shouldHoldAutoMerge({ boqRows, assumptions, workflowPhase }),
+    userApprovedPricing: /user\s+confirmed|approved\s+pricing|proceed\s+with\s+pricing/i.test(text),
   }
+  return result
 }
 
 function emptyResult() {
@@ -265,5 +274,6 @@ function emptyResult() {
     assumptions: [], exclusions: [], provisional: [], takeoffNotes: '',
     contractSum: null, projectTitle: null, projectScope: null,
     hasEstimate: false, hasBOQ: false, hasRisks: false, confidence: 'low',
+    workflowPhase: null, requiresApproval: false, userApprovedPricing: false,
   }
 }

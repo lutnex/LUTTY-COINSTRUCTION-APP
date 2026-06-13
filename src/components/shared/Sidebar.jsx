@@ -11,14 +11,15 @@ const NAV = [
   { id: 'procurement', ico: '🛒', label: 'Procurement'        },
   { id: 'risks',       ico: '⚠️',  label: 'Risk Register'     },
   { id: 'prices',      ico: '💰', label: 'Price Profiles'     },
+  { id: 'market',      ico: '📈', label: 'Material Market Trends' },
   { id: 'calcs',       ico: '🔢', label: 'Calculators'        },
   { id: 'tools',       ico: '🔧', label: 'Quick Tools'        },
   { id: 'settings',    ico: '⚙️', label: 'Estimate Preferences'},
 ]
 
 const QUICK_ACTIONS = [
-  { label: 'Full BOQ',     prompt: 'Generate a complete professional Bill of Quantities from my project. Use master bill structure B1–B25, drawing takeoff, assumptions, exclusions, collections, and risk register. Ask only if drawings are missing.' },
-  { label: 'Full Estimate',prompt: 'Generate a complete estimate with BOQ table, direct costs only (materials, labour, equipment), PROJECT SUBTOTAL, and risk register. Do not add contingency, overheads, or profit unless I ask. Ask me project details first.' },
+  { label: 'Full BOQ',     prompt: 'Follow QS WORKFLOW Phase 1 only: measured quantities, materials needing prices, assumptions, exclusions, provisional items. Do NOT apply unit rates until I provide them.' },
+  { label: 'Full Estimate',prompt: 'Follow QS WORKFLOW. Phase 1 measurement & clarification only. Ask for each material price, specification, and supply type. No assumed market prices.' },
   { label: 'Raise VO',     prompt: 'Draft a variation order. Ask me what changed, who instructed it, and guide me through pricing it correctly.' },
   { label: 'Risk Analysis',prompt: 'Full commercial risk assessment — ask me about scope, contract type, and known risks.' },
 ]
