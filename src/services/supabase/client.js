@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { ENV, isSupabaseConfigured } from '../../config/env.js'
+import { formatSupabaseError } from '../../../lib/supabaseServer.js'
 
 let client = null
 
@@ -42,7 +43,7 @@ export async function checkSupabaseConnection() {
         configured: true,
         message: missingTable
           ? 'Supabase table "saved_documents" not found — run supabase/schema.sql'
-          : error.message,
+          : formatSupabaseError(error),
         statusLabel: 'Supabase Not Connected',
       }
     }

@@ -1,0 +1,68 @@
+import {
+  parseImportDocuments,
+  importDocumentsToSupabase,
+  isSupabaseServerConfigured,
+  formatSupabaseError,
+} from '../../lib/supabaseServer.js'
+
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    req.on('data', (chunk) => chunks.push(chunk))
+    req.on('end', () => resolve(Buffer.concat(chunks)))
+    req.on('error', reject)
+  })
+}
+
+async function getRequestBody(req) {
+  const body = req.body
+
+  if (body != null && body !== '') {
+    if (Buffer.isBuffer(body)) return JSON.parse(body.toString('utf8'))
+    if (typeof body === 'string') return JSON.parse(body)
+    if (typeof body === 'object') return body
+  }
+
+  const raw = await readRawBody(req)
+  if (!raw.length) return null
+  return JSON.parse(raw.toString('utf8'))
+}
+
+export default async function handler(req, res) {
+  res.setHeader('Cache-Control', 'no-store')
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ ok: false, errors: ['Method not allowed'] })
+  }
+
+  if (!isSupabaseServerConfigured()) {
+    return res.status(503).json({
+      ok: false,
+      errors: [
+        'Supabase is not configured on the server. Set SUPABASE_URL and SUPABASE_ANON_KEY (or VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY) in environment variables.',
+      ],
+    })
+  }
+
+  try {
+    const payload = await getRequestBody(req)
+    const docs = parseImportDocuments(payload)
+
+    if (!docs.length) {
+      return res.status(400).json({
+        ok: false,
+        errors: ['No valid documents found in backup file'],
+      })
+    }
+
+    const result = await importDocumentsToSupabase(docs)
+    return res.status(result.ok ? 200 : 502).json(result)
+  } catch (err) {
+    console.error('[api/documents/import] failed:', err)
+    const message = err instanceof Error ? err.message : 'Import failed'
+    return res.status(400).json({
+      ok: false,
+      errors: [formatSupabaseError({ message })],
+    })
+  }
+}

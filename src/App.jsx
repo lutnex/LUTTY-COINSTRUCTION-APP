@@ -169,6 +169,11 @@ function AppShellInner({ projState, dispatch }) {
         )
       } else if (result.ok) {
         toast.success('Already imported', `All ${result.total} documents from ${fileName} are already in Supabase`)
+      } else if (result.imported > 0) {
+        toast.warn(
+          'Partial import',
+          `${result.imported} imported, ${result.failed} failed. ${result.errors.join('; ')}`,
+        )
       } else {
         toast.error('Import failed', result.errors.join('; ') || 'Could not import backup')
       }

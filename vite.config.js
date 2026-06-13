@@ -7,6 +7,11 @@ import {
   resolveApiKey,
   proxyChatToOpenAI,
 } from './lib/aiProxy.js'
+import {
+  importDocumentsToSupabase,
+  parseImportDocuments,
+  isSupabaseServerConfigured,
+} from './lib/supabaseServer.js'
 
 function readRequestBody(req) {
   return new Promise((resolve, reject) => {
@@ -113,6 +118,53 @@ function attachAIHandlers(middlewares, env) {
       } else {
         res.end()
       }
+    }
+  })
+
+  middlewares.use('/api/documents/import', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+
+    if (req.method !== 'POST') {
+      res.statusCode = 405
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, errors: ['Method not allowed'] }))
+      return
+    }
+
+    if (!isSupabaseServerConfigured(env)) {
+      res.statusCode = 503
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({
+        ok: false,
+        errors: ['Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in .env'],
+      }))
+      return
+    }
+
+    try {
+      const raw = await readRequestBody(req)
+      const payload = raw.length ? JSON.parse(raw.toString('utf8')) : null
+      const docs = parseImportDocuments(payload)
+
+      if (!docs.length) {
+        res.statusCode = 400
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ ok: false, errors: ['No valid documents found in backup file'] }))
+        return
+      }
+
+      const result = await importDocumentsToSupabase(docs, env)
+      res.statusCode = result.ok ? 200 : 502
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify(result))
+    } catch (err) {
+      console.error('[dev/api/documents/import] failed:', err)
+      res.statusCode = 400
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({
+        ok: false,
+        errors: [err instanceof Error ? err.message : 'Import failed'],
+      }))
     }
   })
 }

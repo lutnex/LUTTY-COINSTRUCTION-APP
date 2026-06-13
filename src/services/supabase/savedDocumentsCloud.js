@@ -1,6 +1,7 @@
 import { getSupabaseClient } from './client.js'
 import { isSupabaseConfigured } from '../../config/env.js'
 import { rowToDocument, documentToRow } from '../../../lib/savedDocumentMapper.js'
+import { formatSupabaseError } from '../../../lib/supabaseServer.js'
 
 export async function fetchCloudDocuments() {
   if (!isSupabaseConfigured()) return { docs: [], error: null }
@@ -13,7 +14,7 @@ export async function fetchCloudDocuments() {
     .select('*')
     .order('updated_at', { ascending: false })
 
-  if (error) return { docs: [], error: error.message }
+  if (error) return { docs: [], error: formatSupabaseError(error) }
   return { docs: (data || []).map(rowToDocument).filter(Boolean), error: null }
 }
 
@@ -27,7 +28,7 @@ export async function upsertCloudDocument(doc) {
     .from('saved_documents')
     .upsert(documentToRow(doc), { onConflict: 'id' })
 
-  if (error) return { ok: false, error: error.message }
+  if (error) return { ok: false, error: formatSupabaseError(error) }
   return { ok: true, error: null }
 }
 
@@ -43,7 +44,7 @@ export async function insertCloudDocument(doc) {
   if (error) {
     const duplicate = error.code === '23505' || /duplicate key|already exists/i.test(error.message)
     if (duplicate) return { ok: true, skipped: true, error: null }
-    return { ok: false, skipped: false, error: error.message }
+    return { ok: false, skipped: false, error: formatSupabaseError(error) }
   }
   return { ok: true, skipped: false, error: null }
 }
@@ -55,6 +56,6 @@ export async function deleteCloudDocument(id) {
   if (!supabase) return { ok: false, error: 'Supabase not initialized' }
 
   const { error } = await supabase.from('saved_documents').delete().eq('id', id)
-  if (error) return { ok: false, error: error.message }
+  if (error) return { ok: false, error: formatSupabaseError(error) }
   return { ok: true, error: null }
 }

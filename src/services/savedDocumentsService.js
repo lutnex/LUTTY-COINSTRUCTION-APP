@@ -13,6 +13,7 @@ import {
 } from './supabase/savedDocumentsCloud.js'
 import { checkSupabaseConnection } from './supabase/client.js'
 import { isSupabaseConfigured } from '../config/env.js'
+import { formatSupabaseError } from '../../lib/supabaseServer.js'
 
 export const CLOUD_WARNING =
   'Cloud saving is not configured. Documents are only saved on this device.'
@@ -111,7 +112,10 @@ export async function migrateLocalDocumentsToCloud() {
 }
 
 export function parseBackupDocuments(raw) {
-  const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+  let parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+  if (typeof parsed === 'string') {
+    parsed = JSON.parse(parsed)
+  }
   const docs = Array.isArray(parsed)
     ? parsed
     : (Array.isArray(parsed?.documents) ? parsed.documents : null)
@@ -121,8 +125,20 @@ export function parseBackupDocuments(raw) {
   return docs.filter(doc => doc?.id && doc?.name)
 }
 
-/** Import backup JSON into Supabase without overwriting existing cloud documents. */
-export async function importBackupDocuments(docs) {
+function mergeImportedDocsIntoLocal(docs) {
+  const localDocs = loadSavedDocuments()
+  const localIds = new Set(localDocs.map(d => d.id))
+  const mergedLocal = [...localDocs]
+  for (const doc of docs) {
+    if (!localIds.has(doc.id)) {
+      mergedLocal.unshift(doc)
+      localIds.add(doc.id)
+    }
+  }
+  persistSavedDocuments(mergedLocal)
+}
+
+async function importBackupDocumentsDirect(docs) {
   if (!isSupabaseConfigured()) {
     return {
       ok: false,
@@ -130,7 +146,7 @@ export async function importBackupDocuments(docs) {
       skipped: 0,
       failed: 0,
       total: docs.length,
-      errors: ['Supabase is not configured'],
+      errors: ['Supabase is not configured in this build. Redeploy after setting VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.'],
     }
   }
 
@@ -142,7 +158,7 @@ export async function importBackupDocuments(docs) {
       skipped: 0,
       failed: 0,
       total: docs.length,
-      errors: [error],
+      errors: [formatSupabaseError({ message: error })],
     }
   }
 
@@ -161,20 +177,11 @@ export async function importBackupDocuments(docs) {
       skipped++
     } else {
       failed++
-      errors.push(`${doc.name}: ${result.error}`)
+      errors.push(`${doc.name}: ${formatSupabaseError({ message: result.error })}`)
     }
   }
 
-  const localDocs = loadSavedDocuments()
-  const localIds = new Set(localDocs.map(d => d.id))
-  const mergedLocal = [...localDocs]
-  for (const doc of docs) {
-    if (!localIds.has(doc.id)) {
-      mergedLocal.unshift(doc)
-      localIds.add(doc.id)
-    }
-  }
-  persistSavedDocuments(mergedLocal)
+  mergeImportedDocsIntoLocal(docs)
 
   return {
     ok: failed === 0,
@@ -183,6 +190,49 @@ export async function importBackupDocuments(docs) {
     failed,
     total: docs.length,
     errors,
+  }
+}
+
+/** Import backup JSON into Supabase without overwriting existing cloud documents. */
+export async function importBackupDocuments(docs) {
+  try {
+    const response = await fetch('/api/documents/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documents: docs }),
+    })
+
+    const result = await response.json().catch(() => null)
+    if (response.ok && result) {
+      mergeImportedDocsIntoLocal(docs)
+      return {
+        ok: Boolean(result.ok),
+        imported: result.imported ?? 0,
+        skipped: result.skipped ?? 0,
+        failed: result.failed ?? 0,
+        total: result.total ?? docs.length,
+        errors: result.errors ?? [],
+      }
+    }
+
+    if (response.status === 404) {
+      return importBackupDocumentsDirect(docs)
+    }
+
+    const serverErrors = result?.errors?.length
+      ? result.errors
+      : [result?.error || `Import API failed (${response.status})`]
+
+    return {
+      ok: false,
+      imported: result?.imported ?? 0,
+      skipped: result?.skipped ?? 0,
+      failed: result?.failed ?? docs.length,
+      total: docs.length,
+      errors: serverErrors,
+    }
+  } catch {
+    return importBackupDocumentsDirect(docs)
   }
 }
 
