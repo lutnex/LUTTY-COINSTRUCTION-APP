@@ -35,8 +35,15 @@ import {
   renameDocumentUnified,
   duplicateDocumentUnified,
   createSavedDocument,
+  migrateLocalDocumentsToCloud,
+  exportLocalDocumentsForMigration,
+  parseBackupDocuments,
+  importBackupDocuments,
+  getDocumentsNeedingCloudSync,
   CLOUD_WARNING,
 } from './services/savedDocumentsService.js'
+import { fetchCloudDocuments } from './services/supabase/savedDocumentsCloud.js'
+import { loadSavedDocuments } from './utils/savedDocuments.js'
 import { useCloudSave } from './hooks/useCloudSave.js'
 
 function AppShell() {
@@ -62,14 +69,39 @@ function AppShellInner({ projState, dispatch }) {
   const [estimatePreferences, setEstimatePreferencesRaw] = useState(() => loadEstimatePreferences())
   const [savedDocuments, setSavedDocuments] = useState([])
   const [savedDocsLoading, setSavedDocsLoading] = useState(true)
+  const [savedDocsMigrating, setSavedDocsMigrating] = useState(false)
+  const [savedDocsImporting, setSavedDocsImporting] = useState(false)
+  const [pendingMigrationCount, setPendingMigrationCount] = useState(0)
   const [draftRecovered, setDraftRecovered] = useState(false)
+
+  const refreshPendingMigrationCount = useCallback(async () => {
+    const localDocs = loadSavedDocuments()
+    const { docs: cloudDocs, error } = await fetchCloudDocuments()
+    if (error) {
+      setPendingMigrationCount(localDocs.length)
+      return
+    }
+    setPendingMigrationCount(getDocumentsNeedingCloudSync(localDocs, cloudDocs).length)
+  }, [])
 
   const refreshSavedDocuments = useCallback(async () => {
     setSavedDocsLoading(true)
     try {
-      const { docs, error, cloudActive } = await loadAllSavedDocuments()
+      const { docs, error, cloudActive, migration } = await loadAllSavedDocuments()
       setSavedDocuments(docs)
-      if (error && cloudActive === false) {
+      if (cloudActive) {
+        await refreshPendingMigrationCount()
+      } else {
+        setPendingMigrationCount(0)
+      }
+      if (migration?.migrated > 0 && migration.failed === 0) {
+        toast.success(
+          'Documents migrated to cloud',
+          `${migration.migrated} local document${migration.migrated === 1 ? '' : 's'} synced to Supabase`,
+        )
+      } else if (migration?.failed > 0) {
+        toast.warn('Partial cloud sync', migration.errors.join('; '))
+      } else if (error && cloudActive === false) {
         // local-only mode — no toast needed
       } else if (error) {
         toast.warn('Cloud sync issue', error)
@@ -79,7 +111,73 @@ function AppShellInner({ projState, dispatch }) {
     } finally {
       setSavedDocsLoading(false)
     }
+  }, [toast, refreshPendingMigrationCount])
+
+  const handleMigrateToCloud = useCallback(async () => {
+    setSavedDocsMigrating(true)
+    try {
+      const result = await migrateLocalDocumentsToCloud()
+      await refreshSavedDocuments()
+      if (result.ok && result.migrated > 0) {
+        toast.success(
+          'Sync complete',
+          `${result.migrated} document${result.migrated === 1 ? '' : 's'} uploaded to Supabase`,
+        )
+      } else if (result.ok) {
+        toast.success('Already synced', 'All local documents are in Supabase')
+      } else {
+        toast.error('Sync failed', result.errors.join('; ') || 'Could not upload documents')
+      }
+    } catch (e) {
+      toast.error('Sync failed', e.message || 'Could not upload documents')
+    } finally {
+      setSavedDocsMigrating(false)
+    }
+  }, [refreshSavedDocuments, toast])
+
+  const handleExportLocalDocuments = useCallback(() => {
+    const count = exportLocalDocumentsForMigration()
+    if (count > 0) {
+      toast.success('Export started', `${count} document${count === 1 ? '' : 's'} saved to JSON`)
+    } else {
+      toast.warn('Nothing to export', 'No local documents found on this device')
+    }
   }, [toast])
+
+  const handleImportBackup = useCallback(async (raw, fileName, readError = null) => {
+    if (readError) {
+      toast.error('Import failed', readError)
+      return
+    }
+
+    setSavedDocsImporting(true)
+    try {
+      const docs = parseBackupDocuments(raw)
+      if (!docs.length) {
+        toast.warn('Import skipped', 'No valid documents found in backup file')
+        return
+      }
+
+      const result = await importBackupDocuments(docs)
+      await refreshSavedDocuments()
+
+      if (result.ok && result.imported > 0) {
+        toast.success(
+          'Backup imported',
+          `${result.imported} document${result.imported === 1 ? '' : 's'} added to Supabase` +
+            (result.skipped ? ` (${result.skipped} already existed)` : ''),
+        )
+      } else if (result.ok) {
+        toast.success('Already imported', `All ${result.total} documents from ${fileName} are already in Supabase`)
+      } else {
+        toast.error('Import failed', result.errors.join('; ') || 'Could not import backup')
+      }
+    } catch (e) {
+      toast.error('Import failed', e instanceof Error ? e.message : 'Invalid backup file')
+    } finally {
+      setSavedDocsImporting(false)
+    }
+  }, [refreshSavedDocuments, toast])
 
   useEffect(() => {
     refreshSavedDocuments()
@@ -460,6 +558,9 @@ function AppShellInner({ projState, dispatch }) {
           <SavedDocumentsPage
             documents={savedDocuments}
             loading={savedDocsLoading}
+            migrating={savedDocsMigrating}
+            importing={savedDocsImporting}
+            pendingMigrationCount={pendingMigrationCount}
             cloudWarning={!cloudSave?.ok && !cloudSave?.checking ? (cloudSave?.message || CLOUD_WARNING) : null}
             cloudActive={cloudSave?.ok}
             onOpen={handleOpenSavedDocument}
@@ -485,6 +586,9 @@ function AppShellInner({ projState, dispatch }) {
             onExport={handleExportSavedDocument}
             onDelete={handleDeleteSavedDocument}
             onRefresh={refreshSavedDocuments}
+            onMigrateToCloud={handleMigrateToCloud}
+            onExportLocal={handleExportLocalDocuments}
+            onImportBackup={handleImportBackup}
           />
         )}
 

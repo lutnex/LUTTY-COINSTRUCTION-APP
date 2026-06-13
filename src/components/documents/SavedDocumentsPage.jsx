@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { C } from '../../utils/constants.js'
 import { fmtN } from '../../utils/formatters.js'
 import { DOCUMENT_CATEGORIES } from '../../utils/savedDocuments.js'
@@ -9,6 +9,8 @@ const CAT_LABEL = Object.fromEntries(DOCUMENT_CATEGORIES.map(c => [c.id, c.label
 export default function SavedDocumentsPage({
   documents,
   loading = false,
+  migrating = false,
+  pendingMigrationCount = 0,
   cloudWarning = null,
   cloudActive = false,
   onOpen,
@@ -17,10 +19,15 @@ export default function SavedDocumentsPage({
   onExport,
   onDelete,
   onRefresh,
+  onMigrateToCloud,
+  onExportLocal,
+  onImportBackup,
+  importing = false,
 }) {
   const [renameId, setRenameId] = useState(null)
   const [renameValue, setRenameValue] = useState('')
   const [deleteId, setDeleteId] = useState(null)
+  const importInputRef = useRef(null)
 
   const startRename = (doc) => {
     setRenameId(doc.id)
@@ -39,6 +46,18 @@ export default function SavedDocumentsPage({
     setDeleteId(null)
   }
 
+  const handleImportFile = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    try {
+      const text = await file.text()
+      await onImportBackup(text, file.name)
+    } catch (e) {
+      await onImportBackup(null, file.name, e instanceof Error ? e.message : 'Could not read backup file')
+    }
+  }
+
   return (
     <div style={{ flex: 1, overflowY: 'auto' }}>
       <div style={{ display: 'flex', gap: 20, padding: '10px 20px', background: C.carbon, borderBottom: `1px solid ${C.border}` }}>
@@ -54,12 +73,54 @@ export default function SavedDocumentsPage({
             <div style={{ fontFamily: "'Bebas Neue'", fontSize: 25, letterSpacing: 2, color: C.amber, marginBottom: 3 }}>SAVED DOCUMENTS</div>
             <div style={{ fontSize: 12.5, color: C.textDim }}>
               Estimates, BOQs, quotations, and invoices — {cloudActive ? 'synced to cloud storage.' : 'stored on this device unless cloud is configured.'}
+              {' '}Use <strong style={{ color: C.amber }}>Import Backup</strong> to upload an exported JSON file to Supabase.
             </div>
           </div>
-          <button type="button" onClick={onRefresh} disabled={loading} style={btn('outline')}>
-            {loading ? '↻ Loading…' : '↻ Refresh'}
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".json,application/json"
+              onChange={handleImportFile}
+              style={{ display: 'none' }}
+            />
+            <button
+              type="button"
+              onClick={() => importInputRef.current?.click()}
+              disabled={loading || migrating || importing}
+              style={btn(cloudActive ? 'primary' : 'outline')}
+            >
+              {importing ? '↓ Importing…' : '↓ Import Backup'}
+            </button>
+            {cloudActive && pendingMigrationCount > 0 && (
+              <button type="button" onClick={onMigrateToCloud} disabled={loading || migrating || importing} style={btn('outline')}>
+                {migrating ? '↑ Syncing…' : `↑ Sync ${pendingMigrationCount} to Cloud`}
+              </button>
+            )}
+            {!cloudActive && documents.length > 0 && (
+              <button type="button" onClick={onExportLocal} disabled={loading || importing} style={btn('outline')}>
+                Export Local Backup
+              </button>
+            )}
+            <button type="button" onClick={onRefresh} disabled={loading || migrating || importing} style={btn('outline')}>
+              {loading ? '↻ Loading…' : '↻ Refresh'}
+            </button>
+          </div>
         </div>
+
+        {cloudActive && pendingMigrationCount > 0 && !migrating && (
+          <div style={{
+            background: 'rgba(34,197,94,.08)',
+            border: '1px solid rgba(34,197,94,.35)',
+            borderRadius: 8,
+            padding: '10px 14px',
+            marginBottom: 16,
+            fontSize: 12.5,
+            color: '#4ADE80',
+          }}>
+            {pendingMigrationCount} document{pendingMigrationCount === 1 ? '' : 's'} on this device {pendingMigrationCount === 1 ? 'has' : 'have'} not been synced to Supabase yet.
+          </div>
+        )}
 
         {cloudWarning && (
           <div style={{
