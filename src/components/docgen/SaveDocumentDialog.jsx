@@ -1,11 +1,18 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { C } from '../../utils/constants.js'
 import { DOCUMENT_CATEGORIES } from '../../utils/savedDocuments.js'
 
 export default function SaveDocumentDialog({ open, defaultName, defaultProject, defaultCategory, onSave, onCancel }) {
-  const [name, setName] = useState(defaultName || '')
-  const [projectName, setProjectName] = useState(defaultProject || '')
-  const [category, setCategory] = useState(defaultCategory || 'estimate')
+  const [name, setName] = useState('')
+  const [projectName, setProjectName] = useState('')
+  const [category, setCategory] = useState('estimate')
+
+  useEffect(() => {
+    if (!open) return
+    setName(defaultName || '')
+    setProjectName(defaultProject || '')
+    setCategory(defaultCategory || 'estimate')
+  }, [open, defaultName, defaultProject, defaultCategory])
 
   if (!open) return null
 

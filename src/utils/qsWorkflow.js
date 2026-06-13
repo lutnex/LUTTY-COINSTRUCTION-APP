@@ -1,5 +1,6 @@
-import { findSavedPrice } from './priceStore.js'
+import { findProfileItem } from './priceStore.js'
 import { findMarketPrice, MATERIAL_MARKET_CATALOG } from '../data/materialMarketCatalog.js'
+import { PRICING_SOURCE_MODES, PRICE_ITEM_SOURCES } from './priceProfileTypes.js'
 
 export const SUPPLY_TYPES = {
   CONTRACTOR: 'contractor-supplied',
@@ -13,8 +14,11 @@ export const PRICE_SOURCES = {
   USER: 'user',
   PROFILE: 'profile',
   MARKET: 'market',
+  LIVE: 'live',
   ASSUMPTION: 'assumption',
   PENDING: 'pending',
+  PROVISIONAL: 'provisional',
+  MANUAL: 'manual',
 }
 
 export const PRESENTATION_STYLES = {
@@ -24,6 +28,7 @@ export const PRESENTATION_STYLES = {
 
 export const WORKFLOW_PHASES = {
   MEASUREMENT: 'measurement',
+  PRICING_SOURCE: 'pricing_source',
   PRICE_COLLECTION: 'price_collection',
   CLARIFICATION: 'clarification',
   REVIEW: 'review',
@@ -75,28 +80,171 @@ function rowNeedsPrice(row) {
   return !parseRate(row.rate)
 }
 
-export function resolveRowPrice(row, { savedPrices = [], marketCatalog = MATERIAL_MARKET_CATALOG, allowAssumptions = false } = {}) {
+export function resolveRowPrice(row, {
+  savedPrices = [],
+  marketCatalog = MATERIAL_MARKET_CATALOG,
+  livePrices = [],
+  pricingMode = PRICING_SOURCE_MODES.PROFILE,
+  profileName = '',
+  allowAssumptions = false,
+} = {}) {
   if (row.supplyType === SUPPLY_TYPES.CLIENT || row.clientSupplied) {
-    return { rate: '0', source: PRICE_SOURCES.USER, confirmed: true }
+    return auditResult('0', PRICE_SOURCES.USER, { userConfirmed: true, notes: 'Client-supplied' })
   }
   if (row.priceSource === PRICE_SOURCES.USER && parseRate(row.rate)) {
-    return { rate: row.rate, source: PRICE_SOURCES.USER, confirmed: true }
+    return auditResult(row.rate, PRICE_SOURCES.USER, { userConfirmed: true, notes: row.rateNotes })
   }
-  const saved = findSavedPrice(savedPrices, { material: row.desc, specification: row.specification, unit: row.unit })
-  if (saved?.price && parseRate(saved.price)) {
-    return { rate: saved.price, source: PRICE_SOURCES.PROFILE, confirmed: !row.priceLocked }
+  if (pricingMode === PRICING_SOURCE_MODES.MANUAL) {
+    return auditResult(row.rate || '', row.rate ? PRICE_SOURCES.MANUAL : PRICE_SOURCES.PENDING, { userConfirmed: Boolean(row.rate) })
   }
+
+  const saved = findProfileItem(savedPrices, { material: row.desc, specification: row.specification, unit: row.unit })
   const market = findMarketPrice(marketCatalog, { material: row.desc, specification: row.specification })
-  if (market?.price && parseRate(market.price)) {
-    return { rate: String(market.price), source: PRICE_SOURCES.MARKET, confirmed: false }
+    || livePrices.find(lp => findProfileItem([{ material: lp.materialName, specification: lp.specification }], { material: row.desc, specification: row.specification }))
+  const liveRate = market?.price ? String(market.price) : ''
+
+  if (pricingMode === PRICING_SOURCE_MODES.PROFILE) {
+    if (saved?.price && parseRate(saved.price)) {
+      return auditResult(saved.price, PRICE_SOURCES.PROFILE, {
+        profileName,
+        supplier: saved.supplier,
+        supplierUrl: saved.supplierUrl,
+        lastUpdated: saved.lastUpdated,
+        userConfirmed: !row.priceLocked,
+      })
+    }
+    return auditResult('', PRICE_SOURCES.PENDING, { notes: 'Rate to be confirmed — not in profile' })
+  }
+
+  if (pricingMode === PRICING_SOURCE_MODES.LIVE) {
+    if (liveRate && parseRate(liveRate)) {
+      return auditResult(liveRate, PRICE_SOURCES.LIVE, {
+        supplier: market?.supplier,
+        supplierUrl: market?.supplierUrl,
+        lastUpdated: market?.checkedAt?.slice?.(0, 10),
+        userConfirmed: false,
+      })
+    }
+    return auditResult('', PRICE_SOURCES.PENDING, { notes: 'Rate to be confirmed — no live price found' })
+  }
+
+  if (pricingMode === PRICING_SOURCE_MODES.COMPARE) {
+    return {
+      rate: row.rate || saved?.price || liveRate || '',
+      source: row.priceSource || (saved?.price ? PRICE_SOURCES.PROFILE : liveRate ? PRICE_SOURCES.LIVE : PRICE_SOURCES.PENDING),
+      confirmed: Boolean(row.priceConfirmed),
+      profileRate: saved?.price || '',
+      liveRate: liveRate || '',
+      profileName,
+      supplier: market?.supplier || saved?.supplier,
+      supplierUrl: market?.supplierUrl || saved?.supplierUrl,
+      lastUpdated: saved?.lastUpdated || market?.checkedAt?.slice?.(0, 10),
+      needsCompare: Boolean(saved?.price && liveRate && Math.abs(parseRate(saved.price) - parseRate(liveRate)) > 0.01),
+    }
+  }
+
+  // Default fallback (profile then market, never invent)
+  if (saved?.price && parseRate(saved.price)) {
+    return auditResult(saved.price, PRICE_SOURCES.PROFILE, { profileName, supplier: saved.supplier, lastUpdated: saved.lastUpdated })
+  }
+  if (liveRate && parseRate(liveRate)) {
+    return auditResult(liveRate, PRICE_SOURCES.MARKET, { supplier: market?.supplier, userConfirmed: false })
   }
   if (allowAssumptions && row.priceSource === PRICE_SOURCES.ASSUMPTION && parseRate(row.rate)) {
-    return { rate: row.rate, source: PRICE_SOURCES.ASSUMPTION, confirmed: false }
+    return auditResult(row.rate, PRICE_SOURCES.ASSUMPTION, { userConfirmed: false })
   }
-  return { rate: row.rate || '', source: PRICE_SOURCES.PENDING, confirmed: false }
+  return auditResult(row.rate || '', PRICE_SOURCES.PENDING, { notes: 'Rate to be confirmed' })
 }
 
-export function identifyMissingMaterialPrices(rows = [], savedPrices = [], marketCatalog = MATERIAL_MARKET_CATALOG) {
+function auditResult(rate, source, extra = {}) {
+  return {
+    rate: String(rate),
+    source,
+    confirmed: Boolean(extra.userConfirmed),
+    profileName: extra.profileName || '',
+    supplier: extra.supplier || '',
+    supplierUrl: extra.supplierUrl || '',
+    lastUpdated: extra.lastUpdated || '',
+    notes: extra.notes || '',
+    usedAt: new Date().toISOString(),
+    userConfirmed: Boolean(extra.userConfirmed),
+  }
+}
+
+export function buildPriceConflicts(rows = [], { savedPrices = [], livePrices = [], marketCatalog = MATERIAL_MARKET_CATALOG } = {}) {
+  const conflicts = []
+  const seen = new Set()
+  for (const row of rows) {
+    if (!rowNeedsPrice(row)) continue
+    const key = `${row.desc}|${row.specification}`.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    const saved = findProfileItem(savedPrices, { material: row.desc, specification: row.specification, unit: row.unit })
+    const market = findMarketPrice(marketCatalog, { material: row.desc, specification: row.specification })
+      || livePrices.find(lp => lp.materialName && row.desc?.toLowerCase().includes(lp.materialName.toLowerCase().slice(0, 8)))
+    const profileRate = parseRate(saved?.price)
+    const liveRate = parseRate(market?.price)
+    if (!profileRate || !liveRate) continue
+    if (Math.abs(profileRate - liveRate) < 0.01) continue
+    conflicts.push({
+      id: `conflict-${row.id}`,
+      rowId: row.id,
+      material: row.desc,
+      specification: row.specification || '',
+      profileRate: saved.price,
+      profileUnit: saved.unit || row.unit,
+      profileUpdated: saved.lastUpdated,
+      liveRate: String(market.price),
+      liveUnit: market.unit || row.unit,
+      liveSupplier: market.supplier || '',
+      liveSupplierUrl: market.supplierUrl || '',
+      difference: Math.round((liveRate - profileRate) * 100) / 100,
+    })
+  }
+  return conflicts
+}
+
+export function applyConflictChoices(rows = [], resolved = []) {
+  const byRow = new Map(resolved.map(r => [r.rowId, r]))
+  return rows.map(row => {
+    const c = byRow.get(row.id)
+    if (!c) return row
+    const choice = c.choice
+    if (choice === 'profile') {
+      return applyAuditToRow(row, c.profileRate, PRICE_SOURCES.PROFILE, { profileName: 'Profile', userConfirmed: true })
+    }
+    if (choice === 'live') {
+      return applyAuditToRow(row, c.liveRate, PRICE_SOURCES.LIVE, { supplier: c.liveSupplier, supplierUrl: c.liveSupplierUrl, userConfirmed: true })
+    }
+    if (choice === 'provisional') {
+      return { ...row, supplyType: SUPPLY_TYPES.PROVISIONAL, rate: '', amount: '', priceSource: PRICE_SOURCES.PROVISIONAL, rateNotes: 'Provisional — rate to be confirmed' }
+    }
+    return { ...row, priceSource: PRICE_SOURCES.MANUAL, priceConfirmed: false, rateNotes: 'Manual override required' }
+  })
+}
+
+function applyAuditToRow(row, rate, source, audit = {}) {
+  const qty = parseFloat(row.qty) || 0
+  const r = String(rate)
+  const amount = r && qty ? String(Math.round(qty * parseFloat(r) * 100) / 100) : row.amount
+  return {
+    ...row,
+    rate: r,
+    amount,
+    priceSource: source,
+    priceConfirmed: audit.userConfirmed !== false,
+    rateSourceDetail: audit.profileName || audit.supplier || '',
+    supplierUrl: audit.supplierUrl || row.supplierUrl,
+    rateUsedAt: new Date().toISOString(),
+    rateNotes: audit.notes || '',
+  }
+}
+
+export function identifyMissingMaterialPrices(rows = [], savedPrices = [], marketCatalog = MATERIAL_MARKET_CATALOG, {
+  pricingMode = PRICING_SOURCE_MODES.PROFILE,
+  livePrices = [],
+  profileName = '',
+} = {}) {
   const requests = []
   const seen = new Set()
 
@@ -107,8 +255,7 @@ export function identifyMissingMaterialPrices(rows = [], savedPrices = [], marke
     seen.add(key)
 
     const template = MATERIAL_PRICE_TEMPLATES.find(t => t.key === key)
-    const saved = findSavedPrice(savedPrices, { material: row.desc, specification: row.specification, unit: row.unit })
-    const market = findMarketPrice(marketCatalog, { material: row.desc, specification: row.specification })
+    const resolved = resolveRowPrice(row, { savedPrices, marketCatalog, livePrices, pricingMode, profileName })
 
     requests.push({
       id: `price-${row.id}`,
@@ -116,19 +263,24 @@ export function identifyMissingMaterialPrices(rows = [], savedPrices = [], marke
       material: template?.label || row.desc || 'Material',
       specification: row.specification || template?.spec || '',
       unit: row.unit || template?.unit || 'nr',
-      unitPrice: saved?.price || (market?.status === 'live' ? market.price : '') || '',
-      supplier: saved?.supplier || market?.supplier || '',
+      unitPrice: resolved.rate || '',
+      supplier: resolved.supplier || '',
       supplyType: row.supplyType || SUPPLY_TYPES.CONTRACTOR,
-      priceSource: saved?.price ? PRICE_SOURCES.PROFILE : (market?.price ? PRICE_SOURCES.MARKET : PRICE_SOURCES.PENDING),
-      status: saved?.price || market?.price ? 'suggested' : 'required',
-      marketStatus: market?.status || 'manual_entry_required',
+      priceSource: resolved.source || PRICE_SOURCES.PENDING,
+      status: resolved.rate ? 'suggested' : 'required',
+      marketStatus: resolved.rate ? 'available' : 'manual_entry_required',
+      rateNotes: resolved.notes || (resolved.rate ? '' : 'Rate to be confirmed'),
+      profileRate: resolved.profileRate || '',
+      liveRate: resolved.liveRate || '',
+      rateSourceDetail: resolved.profileName || resolved.supplier || '',
     })
   }
   return requests
 }
 
-export function applyPriceInputsToRows(rows = [], priceInputs = []) {
+export function applyPriceInputsToRows(rows = [], priceInputs = [], { profileName = '' } = {}) {
   const byRow = new Map(priceInputs.map(p => [p.rowId, p]))
+  const now = new Date().toISOString()
   return rows.map(row => {
     const input = byRow.get(row.id)
     if (!input) return row
@@ -143,9 +295,13 @@ export function applyPriceInputsToRows(rows = [], priceInputs = []) {
       specification: input.specification || row.specification,
       supplier: input.supplier || row.supplier,
       supplyType: input.supplyType || row.supplyType,
-      priceSource: PRICE_SOURCES.USER,
-      priceConfirmed: Boolean(rate),
+      priceSource: input.priceSource || (rate ? PRICE_SOURCES.USER : PRICE_SOURCES.PENDING),
+      priceConfirmed: Boolean(rate && input.status !== 'required'),
       clientSupplied: input.supplyType === SUPPLY_TYPES.CLIENT,
+      rateSourceDetail: input.rateSourceDetail || profileName || input.supplier || '',
+      supplierUrl: input.supplierUrl || row.supplierUrl || '',
+      rateUsedAt: now,
+      rateNotes: input.rateNotes || input.notes || (rate ? '' : 'Rate to be confirmed'),
     }
   })
 }
@@ -302,11 +458,13 @@ export function buildWorkflowDocPayload(intelligenceData, {
 }
 
 export function detectWorkflowPhaseFromText(text = '') {
-  if (/###\s*QS\s+WORKFLOW[^]*PHASE\s*4|FINAL\s+REVIEW|READY\s+FOR\s+EXPORT/i.test(text)) return WORKFLOW_PHASES.REVIEW
-  if (/###\s*QS\s+WORKFLOW[^]*PHASE\s*3|PRICE\s+COLLECTION|MATERIAL\s+PRICES\s+REQUIRED/i.test(text)) return WORKFLOW_PHASES.PRICE_COLLECTION
-  if (/###\s*QS\s+WORKFLOW[^]*PHASE\s*2|CLARIFICATION|MISSING\s+INFORMATION/i.test(text)) return WORKFLOW_PHASES.CLARIFICATION
+  if (/###\s*QS\s+WORKFLOW[^]*PHASE\s*5|FINAL\s+REVIEW|READY\s+FOR\s+EXPORT/i.test(text)) return WORKFLOW_PHASES.REVIEW
+  if (/###\s*QS\s+WORKFLOW[^]*PHASE\s*4|PRICED\s+BOQ/i.test(text)) return WORKFLOW_PHASES.REVIEW
+  if (/###\s*QS\s+WORKFLOW[^]*PHASE\s*3|MATERIAL\s+PRICE\s+COLLECTION|MATERIAL\s+PRICES\s+REQUIRED/i.test(text)) return WORKFLOW_PHASES.PRICE_COLLECTION
+  if (/###\s*QS\s+WORKFLOW[^]*PHASE\s*2|PRICING\s+SOURCE|WHICH\s+PRICING\s+SOURCE/i.test(text)) return WORKFLOW_PHASES.PRICING_SOURCE
   if (/###\s*QS\s+WORKFLOW[^]*PHASE\s*1|MEASUREMENT|TAKEOFF/i.test(text)) return WORKFLOW_PHASES.MEASUREMENT
   if (/PRICE\s+COLLECTION|MATERIAL\s+PRICES\s+REQUIRED|USER\s+PRICES\s+REQUIRED/i.test(text)) return WORKFLOW_PHASES.PRICE_COLLECTION
+  if (/PRICING\s+SOURCE|USE\s+SAVED\s+PRICE\s+PROFILE/i.test(text)) return WORKFLOW_PHASES.PRICING_SOURCE
   return null
 }
 

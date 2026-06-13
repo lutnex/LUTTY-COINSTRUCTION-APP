@@ -6,9 +6,10 @@ import { toUserFacingError } from '../services/ai/errors.js'
 import { createRequestGuard } from '../services/ai/request.js'
 import { extractFileContent, buildMessageContent, describeExtraction } from '../utils/fileExtractor.js'
 import { resolvePromptMode, getSystemPromptForMode, augmentBOQUserPrompt } from '../services/boq/boqEngine.js'
+import { saveChatSession, loadChatSession, clearChatSession } from '../utils/sessionStore.js'
 
-export function useChat({ prices = [], onUsage, onExtract } = {}) {
-  const [msgs,          setMsgs]          = useState([])
+export function useChat({ prices = [], onUsage, onExtract, persist = true } = {}) {
+  const [msgs,          setMsgs]          = useState(() => (persist ? loadChatSession() : []))
   const [inp,           setInp]           = useState('')
   const [busy,          setBusy]          = useState(false)
   const [progressLabel, setProgressLabel] = useState('')
@@ -30,6 +31,11 @@ export function useChat({ prices = [], onUsage, onExtract } = {}) {
     abortRef.current?.abort()
     if (imgUrlRef.current) URL.revokeObjectURL(imgUrlRef.current)
   }, [])
+
+  useEffect(() => {
+    if (!persist || busy) return
+    saveChatSession(msgs)
+  }, [msgs, busy, persist])
 
   const clearImgPreview = useCallback(() => {
     if (imgUrlRef.current) {
@@ -231,14 +237,15 @@ export function useChat({ prices = [], onUsage, onExtract } = {}) {
     setMsgs(prev => prev.map(m => (m.streaming ? { ...m, streaming: false } : m)))
   }, [])
 
-  const clear = useCallback(() => {
+  const clear = useCallback((options = {}) => {
     abortRef.current?.abort()
     clearImgPreview()
     setAttach(null)
     setMsgs([])
     setBusy(false)
     setProgressLabel('')
-  }, [clearImgPreview])
+    if (options.clearStorage !== false && persist) clearChatSession()
+  }, [clearImgPreview, persist])
 
   return {
     msgs, inp, setInp, busy, progressLabel, attempt,

@@ -4,6 +4,7 @@
 
 import { inferMaterialCategory, normalizeMaterialState } from '../../utils/materialCategories.js'
 import { detectWorkflowPhaseFromText, PRICE_SOURCES, shouldHoldAutoMerge } from '../../utils/qsWorkflow.js'
+import { extractAgreedPricesFromText } from '../../utils/priceExtraction.js'
 
 function parseTableRows(tableBlock, defaultSection = 'General') {
   const rows = []
@@ -243,6 +244,7 @@ export function parseAIResponse(text) {
   )
 
   const workflowPhase = detectWorkflowPhaseFromText(text)
+  const agreedPrices = extractAgreedPricesFromText(text)
   const result = {
     boqRows,
     materials: categorized.materials,
@@ -262,6 +264,8 @@ export function parseAIResponse(text) {
     hasRisks,
     confidence,
     workflowPhase,
+    agreedPrices,
+    hasAgreedPrices: agreedPrices.length > 0,
     requiresApproval: shouldHoldAutoMerge({ boqRows, assumptions, workflowPhase }),
     userApprovedPricing: /user\s+confirmed|approved\s+pricing|proceed\s+with\s+pricing/i.test(text),
   }
@@ -275,5 +279,6 @@ function emptyResult() {
     contractSum: null, projectTitle: null, projectScope: null,
     hasEstimate: false, hasBOQ: false, hasRisks: false, confidence: 'low',
     workflowPhase: null, requiresApproval: false, userApprovedPricing: false,
+    agreedPrices: [], hasAgreedPrices: false,
   }
 }

@@ -1,5 +1,5 @@
 // src/App.jsx
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { ToastProvider, useToast } from './context/ToastContext.jsx'
 import { ProjectProvider, useProjects } from './context/ProjectContext.jsx'
 import { ProjectIntelligenceProvider, useProjectIntelligence } from './context/ProjectIntelligenceContext.jsx'
@@ -16,6 +16,9 @@ import { CalcsPage } from './components/tools/CalcsPage.jsx'
 import { ToolsPage } from './components/tools/ToolsPage.jsx'
 import MarketTrendsPage from './components/tools/MarketTrendsPage.jsx'
 import QSExportWorkflow from './components/boq/QSExportWorkflow.jsx'
+import SaveProjectDialog from './components/projects/SaveProjectDialog.jsx'
+import SavePricesToProfileDialog from './components/pricing/SavePricesToProfileDialog.jsx'
+import PricingSourceDialog from './components/pricing/PricingSourceDialog.jsx'
 import { useChat } from './hooks/useChat.js'
 import { useAIHealth } from './hooks/useAIHealth.js'
 import { useAIUsage } from './hooks/useAIUsage.js'
@@ -23,9 +26,22 @@ import { useBOQ } from './hooks/useBOQ.js'
 import { useDocGen } from './hooks/useDocGen.js'
 import { buildBOQReviewPrompt, normalizePromptInput } from './utils/promptBuilder.js'
 import { serializeBOQ, saveDocGenDraft } from './utils/boqWorkflow.js'
-import { mergeExtractIntoProjectData, projectDataToDocPayload } from './utils/projectIntelligence.js'
+import { mergeExtractIntoProjectData, projectDataToDocPayload, intelligenceToProjectPatch, emptyProjectData } from './utils/projectIntelligence.js'
 import { applyPresentationStyle } from './utils/qsWorkflow.js'
-import { loadPriceProfiles, savePriceProfiles } from './utils/priceStore.js'
+import {
+  loadPriceProfileState,
+  getActiveProfileItems,
+  getActiveProfile,
+  updateActiveProfileItems,
+  addItemsToProfile,
+  createProfile,
+  setActiveProfileId,
+  savePriceProfileState,
+} from './utils/priceStore.js'
+import { extractAgreedPricesFromChat } from './utils/priceExtraction.js'
+import { loadAllPriceProfiles, persistPriceProfiles } from './services/priceProfilesService.js'
+import { fetchMaterialPrices } from './services/materialPricesService.js'
+import { saveAppSession, loadAppSession, clearAppSession } from './utils/sessionStore.js'
 import { downloadPDF, printDocument, buildDocumentHTML } from './services/ai/pdfEngine.js'
 import { useCompanyLogo } from './hooks/useCompanyLogo.js'
 import { DEFAULT_PRICES, DEFAULT_RISKS, DEFAULT_PROC, C } from './utils/constants.js'
@@ -65,10 +81,23 @@ function AppShellInner({ projState, dispatch }) {
   const toast = useToast()
   const intelligence = useProjectIntelligence()
 
-  const [tab,        setTab]        = useState('chat')
-  const [prices,     setPrices]     = useState(() => loadPriceProfiles())
+  const [tab,        setTab]        = useState(() => loadAppSession()?.tab || 'chat')
+  const [priceProfileState, setPriceProfileState] = useState(() => loadPriceProfileState())
+  const prices = useMemo(() => getActiveProfileItems(priceProfileState), [priceProfileState])
+  const activeProfile = useMemo(() => getActiveProfile(priceProfileState), [priceProfileState])
+  const setPrices = useCallback((next) => {
+    setPriceProfileState(prev => updateActiveProfileItems(prev, next))
+  }, [])
+  const [livePrices, setLivePrices] = useState([])
+  const [savePricesOpen, setSavePricesOpen] = useState(false)
+  const [extractedPrices, setExtractedPrices] = useState([])
+  const [pricingSourceOpen, setPricingSourceOpen] = useState(false)
   const [qsWorkflowOpen, setQsWorkflowOpen] = useState(false)
   const [qsWorkflowData, setQsWorkflowData] = useState(null)
+  const [qsInitialStep, setQsInitialStep] = useState(0)
+  const [qsInitialStyle, setQsInitialStyle] = useState(null)
+  const [saveProjectOpen, setSaveProjectOpen] = useState(false)
+  const [saveProjectExtract, setSaveProjectExtract] = useState(null)
   const [risks,      setRisks]      = useState(DEFAULT_RISKS)
   const [proc,       setProc]       = useState(DEFAULT_PROC)
   const [pdfStatus,  setPdfStatus]  = useState(null)
@@ -194,6 +223,21 @@ function AppShellInner({ projState, dispatch }) {
     refreshSavedDocuments()
   }, [refreshSavedDocuments])
 
+  useEffect(() => {
+    loadAllPriceProfiles().then(({ state }) => {
+      if (state) setPriceProfileState(state)
+    })
+    fetchMaterialPrices().then(({ prices: lp }) => setLivePrices(lp || []))
+  }, [])
+
+  useEffect(() => {
+    savePriceProfileState(priceProfileState)
+  }, [priceProfileState])
+
+  useEffect(() => {
+    saveAppSession({ tab })
+  }, [tab])
+
   const setEstimatePreferences = useCallback((next) => {
     setEstimatePreferencesRaw(prev => {
       const updated = typeof next === 'function' ? next(prev) : next
@@ -242,13 +286,108 @@ function AppShellInner({ projState, dispatch }) {
     intelligence.mergeFromExtract(extract)
   }, [intelligence])
 
-  const handleOpenQSWorkflow = useCallback((source) => {
+  const chat = useChat({ prices, onUsage: handleUsage, onExtract: handleAIExtract })
+
+  const handleOpenQSWorkflow = useCallback((source, opts = {}) => {
     const merged = source?.boqRows
       ? mergeExtractIntoProjectData(intelligence.data, source)
-      : { ...intelligence.data, boqItems: source || intelligence.data.boqItems }
+      : { ...intelligence.data, boqItems: source?.boqRows || source || intelligence.data.boqItems }
+    setQsInitialStep(opts.initialStep ?? 0)
+    setQsInitialStyle(opts.initialStyle ?? null)
     setQsWorkflowData(merged)
     setQsWorkflowOpen(true)
   }, [intelligence])
+
+  const handleOpenSaveProject = useCallback((extract) => {
+    setSaveProjectExtract(extract)
+    setSaveProjectOpen(true)
+  }, [])
+
+  const handleSaveProjectFromDialog = useCallback((fields) => {
+    const extract = saveProjectExtract
+    if (!extract) return
+
+    const merged = mergeExtractIntoProjectData(intelligence.data, {
+      ...extract,
+      projectTitle: fields.projectTitle,
+      clientName: fields.clientName,
+      projectLocation: fields.location,
+      projectScope: fields.projectDescription,
+    })
+    merged.projectInfo = {
+      ...merged.projectInfo,
+      title: fields.projectTitle,
+      location: fields.location,
+      description: fields.projectDescription,
+    }
+    merged.client = { ...merged.client, name: fields.clientName }
+    const priced = intelligence.recomputePricing(merged)
+    intelligence.setData(priced)
+
+    const patch = intelligenceToProjectPatch(priced)
+    const todayStr = new Date().toISOString().slice(0, 10)
+    const activeId = projState.activeId
+
+    if (activeId) {
+      dispatch({
+        type: 'UPDATE',
+        id: activeId,
+        patch: {
+          name: fields.projectTitle || 'Untitled Project',
+          meta: {
+            ...(projState.projects.find(p => p.id === activeId)?.meta || {}),
+            clientName: fields.clientName,
+            projectLocation: fields.location,
+            projectTitle: fields.projectTitle,
+            projectDescription: fields.projectDescription,
+          },
+          ...patch,
+        },
+      })
+      dispatch({ type: 'APPLY_INTELLIGENCE', id: activeId, data: priced })
+      toast.success('Project updated', fields.projectTitle || 'Saved')
+    } else {
+      const id = `proj-${Date.now()}`
+      dispatch({
+        type: 'CREATE',
+        project: {
+          id,
+          name: fields.projectTitle || 'Untitled Project',
+          type: 'Residential',
+          status: 'draft',
+          createdAt: todayStr,
+          updatedAt: todayStr,
+          meta: {
+            quoteNum: `DLC-${Date.now().toString().slice(-5)}`,
+            date: todayStr,
+            validDays: '30',
+            clientName: fields.clientName,
+            clientContact: '',
+            clientEmail: '',
+            projectLocation: fields.location,
+            projectTitle: fields.projectTitle,
+            projectDescription: fields.projectDescription,
+          },
+          boqRows: patch.boqRows,
+          materials: patch.materials,
+          labor: patch.labor,
+          prelims: patch.prelims,
+          risks: patch.risks,
+          procurement: [],
+          contractSum: patch.contractSum,
+          documents: [],
+          intelligence: priced,
+        },
+      })
+      toast.success('Project saved', fields.projectTitle || 'New project', {
+        label: 'View Projects',
+        fn: () => setTab('projects'),
+      })
+    }
+
+    setSaveProjectOpen(false)
+    setSaveProjectExtract(null)
+  }, [dispatch, intelligence, projState.activeId, projState.projects, saveProjectExtract, toast])
 
   const handleQSExport = useCallback(({ presentationStyle, priceInputs, rows, assumptions, exclusions, workflowMeta }) => {
     const tid = toast.loading('Exporting to Document Generator…')
@@ -290,16 +429,87 @@ function AppShellInner({ projState, dispatch }) {
         price: String(input.unitPrice),
         supplier: input.supplier || '',
         lastUpdated: new Date().toISOString().slice(0, 10),
-        source: 'user',
+        source: 'user_agreed',
+        category: input.category || 'material',
       }
       if (idx >= 0) next[idx] = { ...next[idx], ...row }
       else next.push(row)
     }
     setPrices(next)
-    savePriceProfiles(next)
-  }, [prices])
+    persistPriceProfiles(updateActiveProfileItems(priceProfileState, next))
+  }, [prices, priceProfileState, setPrices])
 
-  const chat = useChat({ prices, onUsage: handleUsage, onExtract: handleAIExtract })
+  const handleExtractPrices = useCallback(() => {
+    const extracted = extractAgreedPricesFromChat(chat.msgs)
+    if (!extracted.length) {
+      toast.warn('No prices found', 'Agree rates in chat first (e.g. Cement 42.5R = 110 GHS/bag)')
+      return
+    }
+    setExtractedPrices(extracted)
+    toast.success(`${extracted.length} price(s) extracted`, 'Review and save to your Price Profile')
+    setSavePricesOpen(true)
+  }, [chat.msgs, toast])
+
+  const handleSavePricesToProfile = useCallback(() => {
+    const extracted = extractedPrices.length ? extractedPrices : extractAgreedPricesFromChat(chat.msgs)
+    if (!extracted.length) {
+      toast.warn('No prices to save', 'Extract prices from chat first or agree rates with the AI')
+      return
+    }
+    setExtractedPrices(extracted)
+    setSavePricesOpen(true)
+  }, [chat.msgs, extractedPrices, toast])
+
+  const handleConfirmSavePrices = useCallback(async ({ profileId, items, conflictMode }) => {
+    let next = addItemsToProfile(priceProfileState, profileId, items, conflictMode)
+    next = setActiveProfileId(next, profileId)
+    setPriceProfileState(next)
+    const result = await persistPriceProfiles(next)
+    setSavePricesOpen(false)
+    if (result.ok || result.warning) {
+      toast.success('Prices saved to profile', `${items.length} rate(s) added`)
+    } else {
+      toast.warn('Saved locally', result.error || 'Cloud sync unavailable')
+    }
+  }, [priceProfileState, toast])
+
+  const handleCreatePriceProfile = useCallback((name) => {
+    const next = createProfile(priceProfileState, name)
+    setPriceProfileState(next)
+    return next.activeProfileId
+  }, [priceProfileState])
+
+  const handleOpenPricingSource = useCallback(() => {
+    setPricingSourceOpen(true)
+  }, [])
+
+  const handleSelectPricingSource = useCallback((mode) => {
+    intelligence.setData({
+      ...intelligence.data,
+      pricingConfig: {
+        sourceMode: mode,
+        profileId: activeProfile.id,
+        profileName: activeProfile.name,
+        chosenAt: new Date().toISOString(),
+      },
+    })
+    setPricingSourceOpen(false)
+    toast.success('Pricing source set', `Mode: ${mode}`)
+    handleOpenQSWorkflow(intelligence.data, { initialStep: 1 })
+  }, [activeProfile, intelligence, handleOpenQSWorkflow, toast])
+
+  const handleStartNewProject = useCallback(() => {
+    chat.clear()
+    clearAppSession()
+    intelligence.setData(emptyProjectData())
+    docGen.resetDocument({ newQuoteNum: true })
+    setQsWorkflowOpen(false)
+    setQsWorkflowData(null)
+    setSaveProjectOpen(false)
+    setSaveProjectExtract(null)
+    setTab('chat')
+    toast.info('New project started', 'Chat and workflow cleared — use this when you want a fresh start')
+  }, [chat, docGen, intelligence, toast])
 
   // ── Navigate + fire a prompt ─────────────────────────────────────────────
   const firePrompt = useCallback((prompt) => {
@@ -339,12 +549,6 @@ function AppShellInner({ projState, dispatch }) {
   }, [handleOpenQSWorkflow, intelligence, toast])
 
   // ── PDF export from AI extract ────────────────────────────────────────────
-  const handleSaveToProject = useCallback(async (extract, projectId) => {
-    const merged = mergeExtractIntoProjectData(intelligence.data, extract)
-    intelligence.setData(merged)
-    dispatch({ type: 'APPLY_INTELLIGENCE', id: projectId, data: merged })
-  }, [dispatch, intelligence])
-
   const handlePDFExport = useCallback(async (extract) => {
     const tid = toast.loading('Generating PDF…')
     setPdfStatus('Preparing…')
@@ -590,8 +794,12 @@ function AppShellInner({ projState, dispatch }) {
             onImportBOQ={handleImportBOQ}
             onSendToDocGen={handleSendToDocGen}
             onOpenQSWorkflow={handleOpenQSWorkflow}
+            onOpenSaveProject={handleOpenSaveProject}
+            onExtractPrices={handleExtractPrices}
+            onSavePricesToProfile={handleSavePricesToProfile}
+            onChoosePricingSource={handleOpenPricingSource}
             onPDFExport={handlePDFExport}
-            onSaveToProject={handleSaveToProject}
+            onStartNewProject={handleStartNewProject}
             projState={projState}
             dispatch={dispatch}
             setTab={setTab}
@@ -700,8 +908,9 @@ function AppShellInner({ projState, dispatch }) {
 
         {tab === 'prices' && (
           <PricesPage
-            prices={prices}
-            setPrices={(next) => { setPrices(next); savePriceProfiles(next) }}
+            priceProfileState={priceProfileState}
+            setPriceProfileState={setPriceProfileState}
+            onPersist={persistPriceProfiles}
             onAIAnalyze={(txt) => firePrompt(txt)}
             aiBusy={chat.busy}
           />
@@ -716,7 +925,7 @@ function AppShellInner({ projState, dispatch }) {
         )}
 
         {tab === 'market' && (
-          <MarketTrendsPage prices={prices} onPricesChange={(next) => { setPrices(next); savePriceProfiles(next) }} />
+          <MarketTrendsPage prices={prices} onPricesChange={(next) => { setPrices(next); persistPriceProfiles(updateActiveProfileItems(priceProfileState, next)) }} />
         )}
 
         {tab === 'settings' && (
@@ -732,8 +941,41 @@ function AppShellInner({ projState, dispatch }) {
         onClose={() => setQsWorkflowOpen(false)}
         data={qsWorkflowData}
         savedPrices={prices}
+        profileName={activeProfile?.name}
+        livePrices={livePrices}
         onSavePrices={handleSaveWorkflowPrices}
         onExport={handleQSExport}
+        initialStep={qsInitialStep}
+        initialStyle={qsInitialStyle}
+      />
+
+      <SavePricesToProfileDialog
+        open={savePricesOpen}
+        items={extractedPrices}
+        profiles={priceProfileState.profiles}
+        activeProfileId={priceProfileState.activeProfileId}
+        onSave={handleConfirmSavePrices}
+        onCancel={() => setSavePricesOpen(false)}
+        onCreateProfile={handleCreatePriceProfile}
+      />
+
+      <PricingSourceDialog
+        open={pricingSourceOpen}
+        profileName={activeProfile?.name}
+        onSelect={handleSelectPricingSource}
+        onCancel={() => setPricingSourceOpen(false)}
+      />
+
+      <SaveProjectDialog
+        open={saveProjectOpen}
+        defaults={{
+          projectTitle: saveProjectExtract?.projectTitle || intelligence.data?.projectInfo?.title || '',
+          clientName: saveProjectExtract?.clientName || intelligence.data?.client?.name || '',
+          projectLocation: saveProjectExtract?.projectLocation || intelligence.data?.projectInfo?.location || '',
+          projectDescription: saveProjectExtract?.projectScope || intelligence.data?.projectInfo?.description || '',
+        }}
+        onSave={handleSaveProjectFromDialog}
+        onCancel={() => { setSaveProjectOpen(false); setSaveProjectExtract(null) }}
       />
     </div>
   )

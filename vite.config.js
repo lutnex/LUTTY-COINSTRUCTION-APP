@@ -17,6 +17,14 @@ import {
   upsertServerDocument,
   deleteServerDocument,
 } from './lib/supabaseServer.js'
+import {
+  searchAllMaterialPrices,
+  fetchCachedMaterialPrices,
+} from './lib/materialPriceSearch.js'
+import {
+  fetchPriceProfilesFromCloud,
+  upsertPriceProfilesToCloud,
+} from './lib/priceProfileServer.js'
 
 function readRequestBody(req) {
   return new Promise((resolve, reject) => {
@@ -124,6 +132,76 @@ function attachAIHandlers(middlewares, env) {
       } else {
         res.end()
       }
+    }
+  })
+
+  middlewares.use('/api/materials/list', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.statusCode = 405
+      res.end(JSON.stringify({ ok: false, prices: [], error: 'Method not allowed' }))
+      return
+    }
+    const { prices, error } = await fetchCachedMaterialPrices(env)
+    res.statusCode = error ? 502 : 200
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ ok: !error, prices, error }))
+  })
+
+  middlewares.use('/api/materials/search', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    if (req.method !== 'POST') {
+      res.statusCode = 405
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, errors: ['Method not allowed'] }))
+      return
+    }
+    try {
+      const raw = await readRequestBody(req)
+      const body = raw.length ? JSON.parse(raw.toString('utf8')) : { refresh: true }
+      const result = await searchAllMaterialPrices({ refresh: body.refresh !== false }, env)
+      res.statusCode = result.ok ? 200 : 207
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify(result))
+    } catch (err) {
+      res.statusCode = 500
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, errors: [err instanceof Error ? err.message : 'Search failed'] }))
+    }
+  })
+
+  middlewares.use('/api/prices/list', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.statusCode = 405
+      res.end(JSON.stringify({ ok: false, error: 'Method not allowed' }))
+      return
+    }
+    const result = await fetchPriceProfilesFromCloud(env)
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ ok: Boolean(result.state), state: result.state, error: result.error }))
+  })
+
+  middlewares.use('/api/prices/save', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    if (req.method !== 'POST') {
+      res.statusCode = 405
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: 'Method not allowed' }))
+      return
+    }
+    try {
+      const raw = await readRequestBody(req)
+      const body = raw.length ? JSON.parse(raw.toString('utf8')) : {}
+      const result = await upsertPriceProfilesToCloud(body.state, env)
+      res.statusCode = result.ok ? 200 : 500
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify(result))
+    } catch (err) {
+      res.statusCode = 500
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : 'Save failed' }))
     }
   })
 

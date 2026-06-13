@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { C } from '../../utils/constants.js'
 import {
   PRESENTATION_STYLES,
@@ -6,9 +6,13 @@ import {
   identifyMissingMaterialPrices,
   validatePreExport,
   applyPriceInputsToRows,
+  buildPriceConflicts,
+  applyConflictChoices,
 } from '../../utils/qsWorkflow.js'
+import { PRICING_SOURCE_MODES, PRICING_SOURCE_OPTIONS } from '../../utils/priceProfileTypes.js'
+import PriceCompareDialog from '../pricing/PriceCompareDialog.jsx'
 
-const STEPS = ['clarification', 'prices', 'style', 'review']
+const STEPS = ['clarification', 'pricing_source', 'prices', 'style', 'review']
 
 export default function QSExportWorkflow({
   open,
@@ -18,20 +22,44 @@ export default function QSExportWorkflow({
   onSavePrices,
   onExport,
   title = 'QS Export Workflow',
+  initialStep = 0,
+  initialStyle = null,
+  profileName = 'Default Profile',
+  livePrices = [],
 }) {
-  const [step, setStep] = useState(0)
-  const [presentationStyle, setPresentationStyle] = useState(null)
+  const [step, setStep] = useState(initialStep)
+  const [presentationStyle, setPresentationStyle] = useState(initialStyle)
+  const [pricingMode, setPricingMode] = useState(null)
   const [priceInputs, setPriceInputs] = useState([])
-  const [assumptions, setAssumptions] = useState(data?.assumptions || [])
-  const [exclusions, setExclusions] = useState(data?.exclusions || [])
+  const [assumptions, setAssumptions] = useState([])
+  const [exclusions, setExclusions] = useState([])
+  const [compareOpen, setCompareOpen] = useState(false)
+  const [resolvedRows, setResolvedRows] = useState(null)
 
-  const rows = data?.boqItems || data?.boqRows || []
+  useEffect(() => {
+    if (!open) return
+    setStep(initialStep)
+    setPresentationStyle(initialStyle)
+    setPricingMode(data?.pricingConfig?.sourceMode || null)
+    setPriceInputs([])
+    setResolvedRows(null)
+    setAssumptions(data?.assumptions || [])
+    setExclusions(data?.exclusions || [])
+  }, [open, data, initialStep, initialStyle])
+
+  const rows = resolvedRows || data?.boqItems || data?.boqRows || []
   const packet = useMemo(() => buildClarificationPacket({ ...data, assumptions, exclusions, boqItems: rows }), [data, assumptions, exclusions, rows])
 
   const initialPrices = useMemo(() => {
     if (priceInputs.length) return priceInputs
-    return identifyMissingMaterialPrices(rows, savedPrices)
-  }, [rows, savedPrices, priceInputs])
+    return identifyMissingMaterialPrices(rows, savedPrices, undefined, {
+      pricingMode: pricingMode || PRICING_SOURCE_MODES.PROFILE,
+      livePrices,
+      profileName,
+    })
+  }, [rows, savedPrices, priceInputs, pricingMode, livePrices, profileName])
+
+  const priceConflicts = useMemo(() => buildPriceConflicts(rows, { savedPrices, livePrices }), [rows, savedPrices, livePrices])
 
   const review = useMemo(() => validatePreExport({
     ...data,
@@ -51,17 +79,35 @@ export default function QSExportWorkflow({
 
   const handleExport = () => {
     if (!review.ok) return
-    const updatedRows = applyPriceInputsToRows(rows, priceInputs.length ? priceInputs : initialPrices)
+    const updatedRows = applyPriceInputsToRows(rows, priceInputs.length ? priceInputs : initialPrices, { profileName })
     onExport?.({
       presentationStyle,
+      pricingMode,
       priceInputs: priceInputs.length ? priceInputs : initialPrices,
       rows: updatedRows,
       assumptions,
       exclusions,
-      workflowMeta: { reviewedAt: new Date().toISOString(), review },
+      workflowMeta: { reviewedAt: new Date().toISOString(), review, profileName, pricingMode },
     })
     if (onSavePrices) onSavePrices(priceInputs.length ? priceInputs : initialPrices)
     onClose?.()
+  }
+
+  const handlePricingMode = (mode) => {
+    setPricingMode(mode)
+    setPriceInputs([])
+    if (mode === PRICING_SOURCE_MODES.COMPARE && priceConflicts.length) {
+      setCompareOpen(true)
+    } else {
+      setStep(2)
+    }
+  }
+
+  const handleCompareResolve = (resolved) => {
+    const updated = applyConflictChoices(rows, resolved)
+    setResolvedRows(updated)
+    setCompareOpen(false)
+    setStep(2)
   }
 
   const panel = {
@@ -125,7 +171,35 @@ export default function QSExportWorkflow({
 
         {step === 1 && (
           <div>
-            <Note>Enter unit prices for each material. Saved price profile values are suggested — edit before confirming. Market prices require your approval.</Note>
+            <Note>Before applying any rates, choose your pricing source. The AI will not silently select rates.</Note>
+            <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+              {PRICING_SOURCE_OPTIONS.map(opt => (
+                <button key={opt.id} type="button" onClick={() => handlePricingMode(opt.id)} style={{
+                  textAlign: 'left', padding: 14, borderRadius: 10, cursor: 'pointer',
+                  background: pricingMode === opt.id ? C.amberGlow : C.slate,
+                  border: `2px solid ${pricingMode === opt.id ? C.amber : C.border}`,
+                  color: C.text, fontFamily: 'DM Sans',
+                }}>
+                  <div style={{ fontWeight: 700, color: C.amber, marginBottom: 4 }}>{opt.label}</div>
+                  <div style={{ fontSize: 12.5, color: C.textDim, lineHeight: 1.5 }}>{opt.desc}</div>
+                </button>
+              ))}
+            </div>
+            {pricingMode === PRICING_SOURCE_MODES.COMPARE && priceConflicts.length > 0 && (
+              <button type="button" onClick={() => setCompareOpen(true)} style={{ ...primaryBtn(), marginTop: 12 }}>
+                Compare Profile vs Market ({priceConflicts.length} conflicts)
+              </button>
+            )}
+            <Note>Active profile: {profileName}</Note>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div>
+            <Note>
+              Pricing source: {PRICING_SOURCE_OPTIONS.find(o => o.id === pricingMode)?.label || 'Not selected'}.
+              Enter unit prices for each material. Saved profile values are suggested — edit before confirming.
+            </Note>
             <div style={{ overflowX: 'auto' }}>
               <table style={tableStyle()}>
                 <thead>
@@ -159,7 +233,7 @@ export default function QSExportWorkflow({
           </div>
         )}
 
-        {step === 2 && (
+        {step === 3 && (
           <div>
             <Note>Choose document presentation style before sending to Document Generator:</Note>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
@@ -179,12 +253,13 @@ export default function QSExportWorkflow({
           </div>
         )}
 
-        {step === 3 && (
+        {step === 4 && (
           <div>
             <ReviewRow label="Missing prices" value={review.missingPrices.length} warn={review.missingPrices.length > 0} />
             <ReviewRow label="Provisional items" value={review.provisionalItems.length} />
             <ReviewRow label="Optional items" value={review.optionalItems.length} />
             <ReviewRow label="High-risk assumptions" value={review.highRiskAssumptions.length} warn={review.highRiskAssumptions.length > 0} />
+            <ReviewRow label="Pricing source" value={pricingMode ? PRICING_SOURCE_OPTIONS.find(o => o.id === pricingMode)?.label?.slice(0, 30) : 'Not selected'} warn={!pricingMode} />
             <ReviewRow label="Document style" value={presentationStyle === PRESENTATION_STYLES.PREMIUM ? 'Premium Quotation' : presentationStyle === PRESENTATION_STYLES.DETAILED ? 'Detailed BOQ' : 'Not selected'} warn={!presentationStyle} />
             <ReviewRow label="Final total (GHS)" value={Number(review.finalTotal || 0).toLocaleString('en', { minimumFractionDigits: 2 })} highlight />
             {review.blockers.map(b => <Note key={b} warn>⛔ {b}</Note>)}
@@ -195,7 +270,10 @@ export default function QSExportWorkflow({
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 20, gap: 8 }}>
           <button onClick={() => step > 0 ? setStep(step - 1) : onClose()} style={ghostBtn()}>{step === 0 ? 'Cancel' : '← Back'}</button>
           {step < STEPS.length - 1 ? (
-            <button onClick={() => setStep(step + 1)} style={primaryBtn()}>Continue →</button>
+            <button onClick={() => {
+              if (step === 1 && !pricingMode) return
+              setStep(step + 1)
+            }} disabled={step === 1 && !pricingMode} style={{ ...primaryBtn(), opacity: step === 1 && !pricingMode ? 0.5 : 1 }}>Continue →</button>
           ) : (
             <button onClick={handleExport} disabled={!review.ok} style={{ ...primaryBtn(), opacity: review.ok ? 1 : 0.5, cursor: review.ok ? 'pointer' : 'not-allowed' }}>
               Approve and Export to Document Generator
@@ -203,6 +281,13 @@ export default function QSExportWorkflow({
           )}
         </div>
       </div>
+
+      <PriceCompareDialog
+        open={compareOpen}
+        conflicts={priceConflicts}
+        onResolve={handleCompareResolve}
+        onCancel={() => setCompareOpen(false)}
+      />
     </div>
   )
 }

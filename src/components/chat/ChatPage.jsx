@@ -1,10 +1,14 @@
 import { useEffect, useRef } from 'react'
-import { C, QUICK_PROMPTS, BOQ_SECTIONS } from '../../utils/constants.js'
+import { C, QUICK_PROMPTS } from '../../utils/constants.js'
 import { renderMd } from '../../utils/formatters.js'
 import WorkflowPanel from './WorkflowPanel.jsx'
 import { useToast } from '../../context/ToastContext.jsx'
 
-export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, onOpenQSWorkflow, onPDFExport, onSaveToProject, projState, dispatch, setTab }) {
+export default function ChatPage({
+  chat, prices, onImportBOQ, onSendToDocGen, onOpenQSWorkflow, onOpenSaveProject,
+  onExtractPrices, onSavePricesToProfile, onChoosePricingSource,
+  onPDFExport, onStartNewProject, projState, dispatch, setTab,
+}) {
   const toast = useToast()
   const { msgs, inp, setInp, busy, progressLabel, attempt, attach, imgPrev, fileLoading, endRef, taRef, fileRef, send, stop, clear, handleFile, setAttach, setImgPrev } = chat
 
@@ -20,6 +24,8 @@ export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, on
   const onSend = (text, retryCtx) => send(text, retryCtx, (kind, title, body, action) => toast[kind]?.(title, body, action))
   const onFile = (file) => handleFile(file, (kind, title, body) => toast[kind]?.(title, body))
 
+  const hasChatPrices = msgs.some(m => m.extract?.hasAgreedPrices || m.extract?.agreedPrices?.length)
+
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Header */}
@@ -28,8 +34,15 @@ export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, on
           <div style={{ fontFamily: "'Bebas Neue'", fontSize: 19, letterSpacing: '1.5px', color: C.amber }}>Lutty Construction Estimator</div>
           <div style={{ fontSize: 11.5, color: C.textDim }}>Senior QS · Estimator · Engineer · AI Workflow Pipeline</div>
         </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          {msgs.length > 0 && <button onClick={clear} style={btn('outline')}>Clear Chat</button>}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {msgs.length > 0 && (
+            <>
+              <button onClick={() => onExtractPrices?.()} disabled={busy} style={btn('outline')}>Extract Prices from Chat</button>
+              <button onClick={() => onSavePricesToProfile?.()} disabled={busy} style={btn('outline')}>Save Prices to Profile</button>
+              <button onClick={() => onChoosePricingSource?.()} disabled={busy} style={btn('outline')}>Choose Pricing Source</button>
+              <button onClick={onStartNewProject} style={btn('outline')}>Clear Chat / Start New Project</button>
+            </>
+          )}
         </div>
       </div>
 
@@ -39,7 +52,7 @@ export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, on
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: 18, padding: 32 }}>
             <div style={{ fontFamily: "'Bebas Neue'", fontSize: 52, letterSpacing: 5, color: C.amber, textShadow: '0 0 80px rgba(245,158,11,.3)' }}>LUTTY CONSTRUCTIQ</div>
             <div style={{ color: C.textDim, fontSize: 14, maxWidth: 480, lineHeight: 1.7 }}>
-              AI generates structured BOQs automatically. Every response shows workflow actions — import to BOQ, export PDF, or save to project.
+              AI generates structured BOQs automatically. Agree prices in chat, save to Price Profiles, then choose pricing source before BOQ export.
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, justifyContent: 'center', maxWidth: 640 }}>
               {QUICK_PROMPTS.map(p => (
@@ -54,11 +67,9 @@ export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, on
 
         {msgs.map(m => (
           <div key={m.id} style={{ display: 'flex', gap: 10, animation: 'fu .28s ease' }}>
-            {/* Avatar */}
             <div style={{ width: 30, height: 30, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, flexShrink: 0, marginTop: 3, background: m.role === 'user' ? C.muted : 'linear-gradient(135deg,#7a3a0a,#f59e0b)' }}>
               {m.role === 'user' ? '👤' : '🏗️'}
             </div>
-            {/* Content */}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 9, color: C.textFaint, textTransform: 'uppercase', letterSpacing: '1.5px', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span>{m.role === 'user' ? 'You' : 'Estimator Agent'}</span>
@@ -68,7 +79,6 @@ export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, on
               </div>
 
               {m.failed ? (
-                /* Error card */
                 <div style={{ background: 'rgba(248,113,113,.05)', border: '1px solid rgba(248,113,113,.25)', borderRadius: '4px 12px 12px 12px', padding: '12px 14px', animation: 'shake .3s ease' }}>
                   <div style={{ color: C.red, fontSize: 13, fontWeight: 600, marginBottom: 4 }}>⚠ {m.errorTitle || `AI request failed${m.errorStatus ? ` (HTTP ${m.errorStatus})` : ''}`}</div>
                   <div style={{ color: C.textDim, fontSize: 12, lineHeight: 1.5, marginBottom: 10, fontFamily: "'IBM Plex Mono'", wordBreak: 'break-word' }}>{m.display || 'Connection failed'}</div>
@@ -80,7 +90,6 @@ export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, on
                   )}
                 </div>
               ) : (
-                /* Message bubble */
                 <div style={{ background: m.role === 'user' ? C.slate : C.panel, border: `1px solid ${m.role === 'user' ? C.muted : C.border}`, borderRadius: m.role === 'user' ? '10px 2px 10px 10px' : '2px 10px 10px 10px', padding: '12px 15px', color: C.text, lineHeight: 1.75, fontSize: 13.5 }}>
                   {m.imgPrev && <img src={m.imgPrev} alt="preview" style={{ maxWidth: 220, borderRadius: 6, border: `1px solid ${C.border}`, marginBottom: 8, display: 'block' }} />}
                   {m.docName && <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: C.slate, border: `1px solid ${C.border}`, borderRadius: 6, padding: '3px 10px', fontSize: 12, color: C.textDim, marginBottom: 8 }}>📄 {m.docName}</div>}
@@ -99,15 +108,17 @@ export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, on
                 </div>
               )}
 
-              {/* Workflow panel after assistant messages */}
               {m.role === 'assistant' && !m.streaming && !m.failed && m.extract && (
                 <WorkflowPanel
                   extract={m.extract}
                   onImportBOQ={onImportBOQ}
                   onSendToDocGen={onSendToDocGen}
                   onOpenQSWorkflow={onOpenQSWorkflow}
+                  onOpenSaveProject={onOpenSaveProject}
+                  onExtractPrices={onExtractPrices}
+                  onSavePricesToProfile={onSavePricesToProfile}
+                  onChoosePricingSource={onChoosePricingSource}
                   onPDFExport={onPDFExport}
-                  onSaveToProject={onSaveToProject}
                   projState={projState}
                   dispatch={dispatch}
                   setTab={setTab}
@@ -117,7 +128,6 @@ export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, on
           </div>
         ))}
 
-        {/* Typing indicator */}
         {busy && !msgs.some(m => m.streaming) && (
           <div style={{ display: 'flex', gap: 10 }}>
             <div style={{ width: 30, height: 30, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, flexShrink: 0, marginTop: 3, background: 'linear-gradient(135deg,#7a3a0a,#f59e0b)' }}>🏗️</div>
@@ -139,9 +149,8 @@ export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, on
         <div ref={endRef} />
       </div>
 
-      {/* Input bar */}
+      {/* Input bar - same as before */}
       <div style={{ padding: '11px 22px', borderTop: `1px solid ${C.border}`, background: C.carbon, display: 'flex', flexDirection: 'column', gap: 7 }}>
-        {/* Tool chips */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
             ['📎 Attach File',   () => fileRef.current?.click()],
@@ -158,26 +167,18 @@ export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, on
           {imgPrev && <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 6, padding: '3px 9px', fontSize: 11.5, color: C.textDim }}>🖼️ {attach?.name}<button onClick={() => { setAttach(null); setImgPrev(null) }} style={{ background: 'none', border: 'none', color: C.red, cursor: 'pointer' }}>✕</button></div>}
           {attach && !imgPrev && <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 6, padding: '3px 9px', fontSize: 11.5, color: C.textDim }}>📄 {attach.name}<button onClick={() => setAttach(null)} style={{ background: 'none', border: 'none', color: C.red, cursor: 'pointer' }}>✕</button></div>}
         </div>
-
-        {/* Input row */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-          <textarea
-            ref={taRef}
-            rows={1}
-            value={inp}
-            onChange={e => setInp(e.target.value)}
+          <textarea ref={taRef} rows={1} value={inp} onChange={e => setInp(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend() } }}
             onPaste={e => { const f = e.clipboardData.files[0]; if (f) onFile(f) }}
-            placeholder="Describe your project, upload a drawing, or request a BOQ…"
-            style={{ flex: 1, background: C.slate, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontFamily: 'DM Sans', fontSize: 13.5, padding: '8px 12px', resize: 'none', outline: 'none', minHeight: 40, maxHeight: 120, lineHeight: 1.5, transition: 'border-color .2s' }}
-          />
+            placeholder="Describe your project, upload a drawing, or agree material prices…"
+            style={{ flex: 1, background: C.slate, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontFamily: 'DM Sans', fontSize: 13.5, padding: '8px 12px', resize: 'none', outline: 'none', minHeight: 40, maxHeight: 120, lineHeight: 1.5 }} />
           {busy
             ? <button onClick={stop} style={{ background: 'rgba(248,113,113,.12)', border: '1px solid rgba(248,113,113,.3)', borderRadius: 8, color: C.red, fontSize: 12, fontWeight: 600, padding: '0 14px', height: 40, cursor: 'pointer', fontFamily: 'DM Sans', flexShrink: 0 }}>■ Stop</button>
             : <button onClick={() => onSend()} style={{ background: C.amber, color: C.ink, border: 'none', borderRadius: 8, width: 40, height: 40, cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>➤</button>
           }
         </div>
       </div>
-
       <input ref={fileRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f) }} />
     </div>
   )
@@ -186,6 +187,5 @@ export default function ChatPage({ chat, prices, onImportBOQ, onSendToDocGen, on
 function btn(variant = 'outline') {
   const base = { padding: '6px 13px', borderRadius: 6, fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: 'DM Sans', display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'all .15s' }
   if (variant === 'outline') return { ...base, background: 'transparent', border: `1px solid ${C.border}`, color: C.textDim }
-  if (variant === 'primary') return { ...base, background: C.amber, border: 'none', color: C.ink }
   return base
 }
