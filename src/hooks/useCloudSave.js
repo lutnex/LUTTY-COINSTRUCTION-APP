@@ -1,34 +1,31 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { checkAIHealth } from '../services/ai/client.js'
+import { getCloudSaveStatus } from '../services/savedDocumentsService.js'
 
-const POLL_MS = 60_000
+const POLL_MS = 120_000
 
-export function useAIHealth() {
+export function useCloudSave() {
   const [status, setStatus] = useState({
     ok: null,
+    configured: false,
     message: 'Checking…',
     statusLabel: 'Checking…',
     checking: true,
-    latencyMs: null,
-    mode: null,
     lastChecked: null,
   })
   const mounted = useRef(true)
 
   const refresh = useCallback(async () => {
     setStatus(s => ({ ...s, checking: true }))
-    const result = await checkAIHealth()
+    const result = await getCloudSaveStatus()
     if (!mounted.current) return result
 
     setStatus({
       ok: result.ok,
+      configured: result.configured,
       message: result.message,
-      statusLabel: result.statusLabel || (result.ok ? 'AI Connected' : 'AI Offline'),
-      mode: result.mode,
-      latencyMs: result.latencyMs,
+      statusLabel: result.statusLabel,
       checking: false,
       lastChecked: new Date().toISOString(),
-      configured: result.configured,
     })
     return result
   }, [])

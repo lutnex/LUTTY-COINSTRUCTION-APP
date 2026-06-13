@@ -13,14 +13,16 @@ const fnum = (v, fallback) => {
 
 export const ENV = {
   model:       import.meta.env.VITE_AI_MODEL       || 'gpt-4.1-mini',
-  endpoint:    import.meta.env.VITE_AI_ENDPOINT    || '/api/ai/v1/chat/completions',
-  healthUrl:   import.meta.env.VITE_AI_HEALTH_URL  || '/api/ai/health',
+  endpoint:    import.meta.env.VITE_AI_ENDPOINT    || '/api/ai-proxy',
+  healthUrl:   import.meta.env.VITE_AI_HEALTH_URL  || '/api/ai-proxy',
   apiKey:      import.meta.env.VITE_OPENAI_API_KEY || '',
   useProxy:    import.meta.env.VITE_AI_USE_PROXY !== 'false',
   temperature: fnum(import.meta.env.VITE_AI_TEMPERATURE, 0.7),
   timeoutMs:   num(import.meta.env.VITE_AI_TIMEOUT_MS, 45_000),
   maxRetries:  num(import.meta.env.VITE_AI_MAX_RETRIES, 3),
   debug:       import.meta.env.VITE_AI_DEBUG === 'true' || import.meta.env.DEV,
+  supabaseUrl: import.meta.env.VITE_SUPABASE_URL || '',
+  supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || '',
 }
 
 function isValidApiKey(key) {
@@ -38,4 +40,12 @@ export function isDirectMode() {
 export function isAIConfigured() {
   if (ENV.useProxy) return true
   return isValidApiKey(ENV.apiKey)
+}
+
+export function isSupabaseConfigured() {
+  const url = ENV.supabaseUrl?.trim()
+  const key = ENV.supabaseAnonKey?.trim()
+  if (!url || !key) return false
+  if (/your-project|placeholder|xxx|changeme/i.test(url + key)) return false
+  return url.startsWith('https://') && key.length > 20
 }

@@ -8,6 +8,9 @@ const CAT_LABEL = Object.fromEntries(DOCUMENT_CATEGORIES.map(c => [c.id, c.label
 
 export default function SavedDocumentsPage({
   documents,
+  loading = false,
+  cloudWarning = null,
+  cloudActive = false,
   onOpen,
   onRename,
   onDuplicate,
@@ -49,12 +52,34 @@ export default function SavedDocumentsPage({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
           <div>
             <div style={{ fontFamily: "'Bebas Neue'", fontSize: 25, letterSpacing: 2, color: C.amber, marginBottom: 3 }}>SAVED DOCUMENTS</div>
-            <div style={{ fontSize: 12.5, color: C.textDim }}>Estimates, BOQs, quotations, and invoices — separate from construction projects.</div>
+            <div style={{ fontSize: 12.5, color: C.textDim }}>
+              Estimates, BOQs, quotations, and invoices — {cloudActive ? 'synced to cloud storage.' : 'stored on this device unless cloud is configured.'}
+            </div>
           </div>
-          <button type="button" onClick={onRefresh} style={btn('outline')}>↻ Refresh</button>
+          <button type="button" onClick={onRefresh} disabled={loading} style={btn('outline')}>
+            {loading ? '↻ Loading…' : '↻ Refresh'}
+          </button>
         </div>
 
-        {documents.length === 0 ? (
+        {cloudWarning && (
+          <div style={{
+            background: 'rgba(245,158,11,.08)',
+            border: `1px solid ${C.amberLo}`,
+            borderRadius: 8,
+            padding: '10px 14px',
+            marginBottom: 16,
+            fontSize: 12.5,
+            color: C.amber,
+          }}>
+            {cloudWarning}
+          </div>
+        )}
+
+        {loading ? (
+          <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: 32, textAlign: 'center', color: C.textDim, fontSize: 13 }}>
+            Loading saved documents…
+          </div>
+        ) : documents.length === 0 ? (
           <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: 32, textAlign: 'center', color: C.textDim, fontSize: 13 }}>
             No saved documents yet. Create a document in Document Generator and click <strong style={{ color: C.amber }}>Save Document</strong>.
           </div>

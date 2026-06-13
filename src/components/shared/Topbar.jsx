@@ -3,13 +3,27 @@ import { C } from '../../utils/constants.js'
 import { Spinner } from './Spinner.jsx'
 import { useProjects } from '../../context/ProjectContext.jsx'
 
-export function Topbar({ busy, progressLabel, attempt, onStop, aiUsage, aiHealth }) {
+export function Topbar({ busy, progressLabel, attempt, onStop, aiUsage, aiHealth, cloudSave }) {
   const { state } = useProjects()
   const activeProject = state.projects.find(p => p.id === state.activeId)
 
   const latencyLabel = aiHealth?.latencyMs != null && !aiHealth?.checking
     ? `${aiHealth.latencyMs}ms`
     : null
+
+  const aiLabel = aiHealth?.checking
+    ? 'Checking…'
+    : (aiHealth?.statusLabel || (aiHealth?.ok ? 'AI Connected' : 'AI Offline'))
+
+  const aiColor = aiHealth?.checking ? C.textDim : aiHealth?.ok ? C.green : C.red
+
+  const cloudLabel = cloudSave?.checking
+    ? 'Checking…'
+    : (cloudSave?.statusLabel || 'Local Save Only')
+
+  const cloudColor = cloudSave?.checking
+    ? C.textDim
+    : cloudSave?.ok ? C.green : cloudSave?.configured ? C.red : C.textDim
 
   return (
     <header style={{
@@ -60,19 +74,39 @@ export function Topbar({ busy, progressLabel, attempt, onStop, aiUsage, aiHealth
         style={{
           display: 'flex', alignItems: 'center', gap: 5,
           fontFamily: 'IBM Plex Mono', fontSize: 10,
-          color: aiHealth?.checking ? C.textDim : aiHealth?.ok ? C.green : C.red,
+          color: aiColor,
           cursor: 'pointer',
         }}
       >
         <div style={{
           width: 6, height: 6, borderRadius: '50%',
-          background: aiHealth?.checking ? C.textDim : aiHealth?.ok ? C.green : C.red,
+          background: aiColor,
           boxShadow: aiHealth?.ok ? `0 0 8px ${C.green}` : aiHealth?.checking ? 'none' : `0 0 8px ${C.red}`,
         }}/>
-        {aiHealth?.checking ? 'AI Checking…' : aiHealth?.ok ? 'AI Online' : 'AI Offline'}
+        {aiLabel}
         {latencyLabel && aiHealth?.ok && (
           <span style={{ color: C.textFaint, marginLeft: 2 }}>{latencyLabel}</span>
         )}
+      </div>
+
+      <div
+        title={cloudSave?.message || ''}
+        onClick={() => cloudSave?.refresh?.()}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 5,
+          fontFamily: 'IBM Plex Mono', fontSize: 10,
+          color: cloudColor,
+          cursor: 'pointer',
+          borderLeft: `1px solid ${C.border}`,
+          paddingLeft: 10,
+        }}
+      >
+        <div style={{
+          width: 6, height: 6, borderRadius: '50%',
+          background: cloudColor,
+          boxShadow: cloudSave?.ok ? `0 0 8px ${C.green}` : 'none',
+        }}/>
+        {cloudLabel}
       </div>
 
       {aiUsage?.requestCount > 0 && (

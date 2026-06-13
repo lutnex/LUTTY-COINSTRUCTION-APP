@@ -317,23 +317,30 @@ export async function checkAIHealth() {
     if (!res.ok) {
       return {
         ok: false,
-        message: data.message || `Health check HTTP ${res.status}`,
+        message: data.message || data.error?.message || `Health check HTTP ${res.status}`,
+        statusLabel: data.statusLabel || data.error?.statusLabel || (res.status === 503 ? 'Missing API Key' : 'AI Offline'),
         latencyMs,
         configured: false,
+        mode: data.mode,
       }
     }
 
     return {
       ok: Boolean(data.ok),
       message: data.message || (data.ok ? 'Ready' : 'Not configured'),
+      statusLabel: data.statusLabel || (data.ok ? 'AI Connected' : 'AI Offline'),
       mode: data.mode,
       latencyMs,
       configured: Boolean(data.ok),
     }
   } catch (err) {
+    const isFetch = err instanceof TypeError || /failed to fetch/i.test(err?.message || '')
     return {
       ok: false,
-      message: err instanceof Error ? err.message : 'Health check failed',
+      message: isFetch
+        ? 'Cannot reach AI server — check Vercel deployment and OPENAI_API_KEY'
+        : (err instanceof Error ? err.message : 'Health check failed'),
+      statusLabel: 'AI Offline',
       latencyMs: Math.round(performance.now() - t0),
       configured: false,
     }

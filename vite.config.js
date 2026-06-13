@@ -1,15 +1,13 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
-
-const OPENAI_TARGET = 'https://api.openai.com'
-
-function isValidApiKey(key) {
-  if (!key || typeof key !== 'string') return false
-  const k = key.trim()
-  if (k.length < 20) return false
-  if (/your-key|placeholder|xxx|changeme/i.test(k)) return false
-  return k.startsWith('sk-proj-') || k.startsWith('sk-')
-}
+import {
+  OPENAI_TARGET,
+  isValidApiKey,
+  getHealthPayload,
+  getMissingKeyError,
+  resolveApiKey,
+  proxyChatToOpenAI,
+} from './lib/aiProxy.js'
 
 function readRequestBody(req) {
   return new Promise((resolve, reject) => {
@@ -21,26 +19,45 @@ function readRequestBody(req) {
 }
 
 function attachAIHandlers(middlewares, env) {
-  const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY || ''
+  const apiKey = resolveApiKey(env)
 
-  middlewares.use('/api/ai/health', (req, res) => {
+  const handleHealth = (req, res) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.statusCode = 405
       res.end()
       return
     }
-    const ok = isValidApiKey(apiKey)
+    const payload = getHealthPayload(apiKey)
     res.setHeader('Content-Type', 'application/json')
-    res.end(JSON.stringify({
-      ok,
-      mode: 'openai-proxy',
-      message: ok
-        ? 'OpenAI API key configured'
-        : apiKey
-          ? 'OPENAI_API_KEY looks like a placeholder — replace with your real key'
-          : 'OPENAI_API_KEY is missing — copy .env.example to .env',
-    }))
-  })
+    res.statusCode = payload.ok ? 200 : 503
+    res.end(JSON.stringify(payload))
+  }
+
+  const handleProxy = async (req, res) => {
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      handleHealth(req, res)
+      return
+    }
+    if (req.method !== 'POST') {
+      res.statusCode = 405
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: { message: 'Method not allowed' } }))
+      return
+    }
+    if (!isValidApiKey(apiKey)) {
+      res.statusCode = 503
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify(getMissingKeyError(apiKey)))
+      return
+    }
+    await proxyChatToOpenAI(req, res, apiKey)
+  }
+
+  // Primary production endpoint (matches VITE_AI_ENDPOINT=/api/ai-proxy)
+  middlewares.use('/api/ai-proxy', handleProxy)
+
+  // Legacy routes (backward compatibility)
+  middlewares.use('/api/ai/health', handleHealth)
 
   middlewares.use('/api/ai', async (req, res) => {
     if (req.method !== 'POST' && req.method !== 'GET' && req.method !== 'HEAD') {
@@ -52,13 +69,7 @@ function attachAIHandlers(middlewares, env) {
     if (!isValidApiKey(apiKey)) {
       res.statusCode = 503
       res.setHeader('Content-Type', 'application/json')
-      res.end(JSON.stringify({
-        error: {
-          message: apiKey
-            ? 'OPENAI_API_KEY is a placeholder. Add your real key to .env and restart.'
-            : 'OPENAI_API_KEY is not set. Copy .env.example to .env and restart.',
-        },
-      }))
+      res.end(JSON.stringify(getMissingKeyError(apiKey)))
       return
     }
 

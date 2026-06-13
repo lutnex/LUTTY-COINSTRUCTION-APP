@@ -29,13 +29,15 @@ import { loadEstimatePreferences, persistEstimatePreferences } from './utils/fin
 import EstimatePreferencesPage from './components/tools/EstimatePreferencesPage.jsx'
 import SavedDocumentsPage from './components/documents/SavedDocumentsPage.jsx'
 import {
-  loadSavedDocuments,
+  loadAllSavedDocuments,
+  saveDocumentUnified,
+  deleteDocumentUnified,
+  renameDocumentUnified,
+  duplicateDocumentUnified,
   createSavedDocument,
-  saveDocument,
-  deleteSavedDocument,
-  renameSavedDocument,
-  duplicateSavedDocument,
-} from './utils/savedDocuments.js'
+  CLOUD_WARNING,
+} from './services/savedDocumentsService.js'
+import { useCloudSave } from './hooks/useCloudSave.js'
 
 function AppShell() {
   const { state: projState, dispatch } = useProjects()
@@ -58,12 +60,30 @@ function AppShellInner({ projState, dispatch }) {
   const [proc,       setProc]       = useState(DEFAULT_PROC)
   const [pdfStatus,  setPdfStatus]  = useState(null)
   const [estimatePreferences, setEstimatePreferencesRaw] = useState(() => loadEstimatePreferences())
-  const [savedDocuments, setSavedDocuments] = useState(() => loadSavedDocuments())
+  const [savedDocuments, setSavedDocuments] = useState([])
+  const [savedDocsLoading, setSavedDocsLoading] = useState(true)
   const [draftRecovered, setDraftRecovered] = useState(false)
 
-  const refreshSavedDocuments = useCallback(() => {
-    setSavedDocuments(loadSavedDocuments())
-  }, [])
+  const refreshSavedDocuments = useCallback(async () => {
+    setSavedDocsLoading(true)
+    try {
+      const { docs, error, cloudActive } = await loadAllSavedDocuments()
+      setSavedDocuments(docs)
+      if (error && cloudActive === false) {
+        // local-only mode — no toast needed
+      } else if (error) {
+        toast.warn('Cloud sync issue', error)
+      }
+    } catch (e) {
+      toast.error('Could not load documents', e.message || 'Try refreshing')
+    } finally {
+      setSavedDocsLoading(false)
+    }
+  }, [toast])
+
+  useEffect(() => {
+    refreshSavedDocuments()
+  }, [refreshSavedDocuments])
 
   const setEstimatePreferences = useCallback((next) => {
     setEstimatePreferencesRaw(prev => {
@@ -83,6 +103,7 @@ function AppShellInner({ projState, dispatch }) {
   const boq    = useBOQ(intelligence, docGen.financialAdjustments)
   const companyLogo = useCompanyLogo()
   const aiHealth = useAIHealth()
+  const cloudSave = useCloudSave()
   const aiUsage = useAIUsage()
 
   const buildExportData = useCallback(() => {
@@ -299,15 +320,23 @@ function AppShellInner({ projState, dispatch }) {
       category: fields.category,
       snapshot,
     })
-    const saved = saveDocument(doc)
-    if (saved) {
-      docGen.setActiveSavedDocId(saved.id)
-      refreshSavedDocuments()
-      toast.success('Document saved', saved.name, {
-        label: 'View saved', fn: () => setTab('documents'),
-      })
+    const result = await saveDocumentUnified(doc)
+    if (result.ok) {
+      docGen.setActiveSavedDocId(doc.id)
+      await refreshSavedDocuments()
+      if (result.warning) {
+        toast.warn('Saved locally', result.warning)
+      } else if (result.cloudActive) {
+        toast.success('Document saved to cloud', doc.name, {
+          label: 'View saved', fn: () => setTab('documents'),
+        })
+      } else {
+        toast.success('Document saved', doc.name, {
+          label: 'View saved', fn: () => setTab('documents'),
+        })
+      }
     } else {
-      toast.error('Save failed', 'Document could not be saved')
+      toast.error('Save failed', result.error || 'Document could not be saved')
     }
   }, [docGen, buildExportData, companyLogo, refreshSavedDocuments, toast])
 
@@ -321,14 +350,15 @@ function AppShellInner({ projState, dispatch }) {
     }
   }, [docGen, toast])
 
-  const handleDeleteSavedDocument = useCallback((id) => {
-    const ok = deleteSavedDocument(id)
-    if (ok) {
-      refreshSavedDocuments()
+  const handleDeleteSavedDocument = useCallback(async (id) => {
+    const result = await deleteDocumentUnified(id)
+    if (result.ok) {
+      await refreshSavedDocuments()
       if (docGen.activeSavedDocId === id) docGen.setActiveSavedDocId(null)
-      toast.success('Document deleted')
+      if (result.error) toast.warn('Deleted locally', result.error)
+      else toast.success('Document deleted')
     } else {
-      toast.error('Document could not be deleted')
+      toast.error('Document could not be deleted', result.error)
     }
   }, [docGen, refreshSavedDocuments, toast])
 
@@ -385,6 +415,7 @@ function AppShellInner({ projState, dispatch }) {
         onStop={chat.stop}
         aiUsage={aiUsage}
         aiHealth={aiHealth}
+        cloudSave={cloudSave}
       />
 
       <Sidebar
@@ -428,22 +459,27 @@ function AppShellInner({ projState, dispatch }) {
         {tab === 'documents' && (
           <SavedDocumentsPage
             documents={savedDocuments}
+            loading={savedDocsLoading}
+            cloudWarning={!cloudSave?.ok && !cloudSave?.checking ? (cloudSave?.message || CLOUD_WARNING) : null}
+            cloudActive={cloudSave?.ok}
             onOpen={handleOpenSavedDocument}
-            onRename={(id, name) => {
-              if (renameSavedDocument(id, name)) {
-                refreshSavedDocuments()
-                toast.success('Document renamed')
+            onRename={async (id, name) => {
+              const result = await renameDocumentUnified(id, name)
+              if (result.ok) {
+                await refreshSavedDocuments()
+                if (result.warning) toast.warn('Renamed locally', result.warning)
+                else toast.success('Document renamed')
               } else {
-                toast.error('Rename failed')
+                toast.error('Rename failed', result.error)
               }
             }}
-            onDuplicate={(id) => {
-              const copy = duplicateSavedDocument(id)
-              if (copy) {
-                refreshSavedDocuments()
-                toast.success('Document duplicated', copy.name)
+            onDuplicate={async (id) => {
+              const result = await duplicateDocumentUnified(id)
+              if (result.ok && result.doc) {
+                await refreshSavedDocuments()
+                toast.success('Document duplicated', result.doc.name)
               } else {
-                toast.error('Duplicate failed')
+                toast.error('Duplicate failed', result.error)
               }
             }}
             onExport={handleExportSavedDocument}
