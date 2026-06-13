@@ -3,6 +3,7 @@ import {
   resolveApiKey,
   isValidApiKey,
   getMissingKeyError,
+  sanitizeOpenAIError,
 } from '../../lib/aiProxy.js'
 
 export const config = {
@@ -51,6 +52,16 @@ export default async function handler(req, res) {
       body: body?.length ? body : undefined,
     })
 
+    if (upstream.status === 401 || upstream.status === 403) {
+      return res.status(upstream.status).json({
+        error: {
+          message: 'OpenAI rejected the API key. Create a new key at https://platform.openai.com/api-keys and update OPENAI_API_KEY in Vercel environment variables.',
+          code: 'invalid_api_key',
+          statusLabel: 'Invalid API Key',
+        },
+      })
+    }
+
     res.status(upstream.status)
     res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json')
     res.setHeader('Cache-Control', 'no-store')
@@ -69,7 +80,7 @@ export default async function handler(req, res) {
     if (!res.headersSent) {
       res.status(502).json({
         error: {
-          message: err instanceof Error ? err.message : 'OpenAI proxy request failed',
+          message: sanitizeOpenAIError({ message: err instanceof Error ? err.message : 'OpenAI proxy request failed' }),
           statusLabel: 'AI Offline',
         },
       })

@@ -1,12 +1,11 @@
-import { resolveApiKey, getHealthPayload } from '../../lib/aiProxy.js'
+import { checkOpenAIHealth } from '../../lib/aiProxy.js'
 
-export default function handler(req, res) {
+export default async function handler(req, res) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
-    res.status(405).json({ error: 'Method not allowed' })
-    return
+    return res.status(405).json({ error: 'Method not allowed' })
   }
 
-  const payload = getHealthPayload(resolveApiKey())
+  const payload = await checkOpenAIHealth()
   res.setHeader('Cache-Control', 'no-store')
-  res.status(payload.ok ? 200 : 503).json(payload)
+  return res.status(payload.ok ? 200 : 503).json(payload)
 }

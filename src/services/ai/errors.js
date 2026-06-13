@@ -1,7 +1,7 @@
 /** Shared API error parsing and user-facing messages. */
 
 const FRIENDLY = {
-  401: 'Authentication failed — check your API key in .env and restart the dev server.',
+  401: 'Authentication failed — your OpenAI API key is invalid or revoked. Create a new key at https://platform.openai.com/api-keys and update OPENAI_API_KEY in Vercel (or .env locally), then redeploy.',
   403: 'Access denied — your API key may lack permission for this model.',
   404: 'AI endpoint not found — verify VITE_AI_ENDPOINT and proxy configuration.',
   429: 'Rate limit reached — the request will retry automatically, or wait a moment.',

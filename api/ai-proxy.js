@@ -3,6 +3,14 @@
  * OPENAI_API_KEY stays server-side only — never sent to the browser.
  */
 
+import {
+  resolveApiKey,
+  isValidApiKey,
+  getMissingKeyError,
+  checkOpenAIHealth,
+  sanitizeOpenAIError,
+} from '../lib/aiProxy.js'
+
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions'
 
 function readRawBody(req) {
@@ -28,6 +36,16 @@ async function getRequestBody(req) {
 }
 
 async function pipeUpstreamResponse(upstream, res) {
+  if (upstream.status === 401 || upstream.status === 403) {
+    return res.status(upstream.status).json({
+      error: {
+        message: 'OpenAI rejected the API key. Create a new key at https://platform.openai.com/api-keys and update OPENAI_API_KEY in Vercel environment variables.',
+        code: 'invalid_api_key',
+        statusLabel: 'Invalid API Key',
+      },
+    })
+  }
+
   res.status(upstream.status)
   res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json')
   res.setHeader('Cache-Control', 'no-store')
@@ -47,23 +65,20 @@ async function pipeUpstreamResponse(upstream, res) {
 }
 
 export default async function handler(req, res) {
+  res.setHeader('Cache-Control', 'no-store')
+
   if (req.method === 'GET' || req.method === 'HEAD') {
-    res.setHeader('Cache-Control', 'no-store')
-    return res.status(200).json({ ok: true, status: 'AI proxy active' })
+    const health = await checkOpenAIHealth()
+    return res.status(health.ok ? 200 : 503).json(health)
   }
 
   if (req.method !== 'POST') {
     return res.status(405).json({ error: { message: 'Method not allowed' } })
   }
 
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
-    return res.status(503).json({
-      error: {
-        message: 'OPENAI_API_KEY is not set. Add it to Vercel environment variables.',
-        statusLabel: 'Missing API Key',
-      },
-    })
+  const apiKey = resolveApiKey()
+  if (!isValidApiKey(apiKey)) {
+    return res.status(503).json(getMissingKeyError(apiKey))
   }
 
   try {
@@ -85,7 +100,7 @@ export default async function handler(req, res) {
     if (!res.headersSent) {
       return res.status(502).json({
         error: {
-          message: err instanceof Error ? err.message : 'OpenAI proxy request failed',
+          message: sanitizeOpenAIError({ message: err instanceof Error ? err.message : 'OpenAI proxy request failed' }),
           statusLabel: 'AI Offline',
         },
       })

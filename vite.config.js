@@ -6,6 +6,7 @@ import {
   getMissingKeyError,
   resolveApiKey,
   proxyChatToOpenAI,
+  checkOpenAIHealth,
 } from './lib/aiProxy.js'
 import {
   importDocumentsToSupabase,
@@ -29,20 +30,22 @@ function readRequestBody(req) {
 function attachAIHandlers(middlewares, env) {
   const apiKey = resolveApiKey(env)
 
-  const handleHealth = (req, res) => {
+  const handleHealth = async (req, res) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.statusCode = 405
       res.end()
       return
     }
+    const health = await checkOpenAIHealth(env)
     res.setHeader('Content-Type', 'application/json')
-    res.statusCode = 200
-    res.end(JSON.stringify({ ok: true, status: 'AI proxy active' }))
+    res.setHeader('Cache-Control', 'no-store')
+    res.statusCode = health.ok ? 200 : 503
+    res.end(JSON.stringify(health))
   }
 
   const handleProxy = async (req, res) => {
     if (req.method === 'GET' || req.method === 'HEAD') {
-      handleHealth(req, res)
+      await handleHealth(req, res)
       return
     }
     if (req.method !== 'POST') {
@@ -57,8 +60,7 @@ function attachAIHandlers(middlewares, env) {
       res.end(JSON.stringify(getMissingKeyError(apiKey)))
       return
     }
-    const serverKey = env.OPENAI_API_KEY || apiKey
-    await proxyChatToOpenAI(req, res, serverKey)
+    await proxyChatToOpenAI(req, res, apiKey)
   }
 
   // Primary production endpoint (matches VITE_AI_ENDPOINT=/api/ai-proxy)
