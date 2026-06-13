@@ -11,12 +11,14 @@ const fnum = (v, fallback) => {
   return Number.isFinite(n) ? n : fallback
 }
 
+const useProxy = import.meta.env.VITE_AI_USE_PROXY !== 'false'
+
 export const ENV = {
   model:       import.meta.env.VITE_AI_MODEL       || 'gpt-4.1-mini',
-  endpoint:    import.meta.env.VITE_AI_ENDPOINT    || '/api/ai-proxy',
-  healthUrl:   import.meta.env.VITE_AI_HEALTH_URL  || '/api/ai-proxy',
+  endpoint:    import.meta.env.VITE_AI_ENDPOINT    || (useProxy ? '/api/ai-proxy' : 'https://api.openai.com/v1/chat/completions'),
+  healthUrl:   import.meta.env.VITE_AI_HEALTH_URL  || (useProxy ? '/api/ai-proxy' : 'https://api.openai.com/v1/chat/completions'),
   apiKey:      import.meta.env.VITE_OPENAI_API_KEY || '',
-  useProxy:    import.meta.env.VITE_AI_USE_PROXY !== 'false',
+  useProxy,
   temperature: fnum(import.meta.env.VITE_AI_TEMPERATURE, 0.7),
   timeoutMs:   num(import.meta.env.VITE_AI_TIMEOUT_MS, 45_000),
   maxRetries:  num(import.meta.env.VITE_AI_MAX_RETRIES, 3),
