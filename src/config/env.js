@@ -15,8 +15,8 @@ const useProxy = import.meta.env.VITE_AI_USE_PROXY !== 'false'
 
 export const ENV = {
   model:       import.meta.env.VITE_AI_MODEL       || 'gpt-4.1-mini',
-  endpoint:    import.meta.env.VITE_AI_ENDPOINT    || (useProxy ? '/api/ai-proxy' : 'https://api.openai.com/v1/chat/completions'),
-  healthUrl:   import.meta.env.VITE_AI_HEALTH_URL  || (useProxy ? '/api/ai-proxy' : 'https://api.openai.com/v1/chat/completions'),
+  endpoint:    useProxy ? '/api/ai-proxy' : (import.meta.env.VITE_AI_ENDPOINT || 'https://api.openai.com/v1/chat/completions'),
+  healthUrl:   useProxy ? '/api/ai-proxy' : (import.meta.env.VITE_AI_HEALTH_URL || 'https://api.openai.com/v1/chat/completions'),
   apiKey:      import.meta.env.VITE_OPENAI_API_KEY || '',
   useProxy,
   temperature: fnum(import.meta.env.VITE_AI_TEMPERATURE, 0.7),

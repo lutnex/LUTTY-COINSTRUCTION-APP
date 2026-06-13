@@ -327,7 +327,7 @@ export async function checkAIHealth() {
 
     return {
       ok: Boolean(data.ok),
-      message: data.message || (data.ok ? 'Ready' : 'Not configured'),
+      message: data.status || data.message || (data.ok ? 'Ready' : 'Not configured'),
       statusLabel: data.statusLabel || (data.ok ? 'AI Connected' : 'AI Offline'),
       mode: data.mode,
       latencyMs,
