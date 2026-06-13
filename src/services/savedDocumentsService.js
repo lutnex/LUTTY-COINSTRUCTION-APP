@@ -12,7 +12,6 @@ import {
   deleteCloudDocument,
 } from './supabase/savedDocumentsCloud.js'
 import { checkSupabaseConnection } from './supabase/client.js'
-import { isSupabaseConfigured } from '../config/env.js'
 import { formatSupabaseError } from '../../lib/supabaseServer.js'
 
 export const CLOUD_WARNING =
@@ -34,9 +33,6 @@ function mergeDocuments(cloudDocs, localDocs) {
 }
 
 export async function getCloudSaveStatus() {
-  if (!isSupabaseConfigured()) {
-    return { statusLabel: 'Local Save Only', ok: false, configured: false, message: CLOUD_WARNING }
-  }
   return checkSupabaseConnection()
 }
 
@@ -51,14 +47,15 @@ export function getDocumentsNeedingCloudSync(localDocs, cloudDocs) {
 }
 
 export async function migrateLocalDocumentsToCloud() {
-  if (!isSupabaseConfigured()) {
+  const health = await checkSupabaseConnection()
+  if (!health.ok) {
     return {
       ok: false,
       migrated: 0,
       failed: 0,
       skipped: 0,
       pending: 0,
-      errors: ['Supabase is not configured'],
+      errors: [health.message || 'Supabase is not connected'],
     }
   }
 
@@ -139,14 +136,15 @@ function mergeImportedDocsIntoLocal(docs) {
 }
 
 async function importBackupDocumentsDirect(docs) {
-  if (!isSupabaseConfigured()) {
+  const health = await checkSupabaseConnection()
+  if (!health.ok) {
     return {
       ok: false,
       imported: 0,
       skipped: 0,
       failed: 0,
       total: docs.length,
-      errors: ['Supabase is not configured in this build. Redeploy after setting VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.'],
+      errors: [health.message || 'Supabase is not connected'],
     }
   }
 
@@ -250,9 +248,16 @@ export function exportLocalDocumentsForMigration() {
 
 export async function loadAllSavedDocuments() {
   const localDocs = loadSavedDocuments()
+  const health = await checkSupabaseConnection()
 
-  if (!isSupabaseConfigured()) {
-    return { docs: localDocs, source: 'local', cloudActive: false, error: null, migration: null }
+  if (!health.ok) {
+    return {
+      docs: localDocs,
+      source: 'local',
+      cloudActive: false,
+      error: health.configured ? health.message : null,
+      migration: null,
+    }
   }
 
   const { docs: cloudDocs, error } = await fetchCloudDocuments()
@@ -280,7 +285,8 @@ export async function saveDocumentUnified(doc) {
   const saved = saveDocument(doc)
   if (!saved) return { ok: false, error: 'Local save failed', cloudActive: false }
 
-  if (!isSupabaseConfigured()) {
+  const health = await checkSupabaseConnection()
+  if (!health.ok) {
     return { ok: true, error: null, cloudActive: false, warning: CLOUD_WARNING }
   }
 
@@ -298,7 +304,8 @@ export async function deleteDocumentUnified(id) {
   const localOk = persistSavedDocuments(docs)
   if (!localOk) return { ok: false, error: 'Local delete failed' }
 
-  if (isSupabaseConfigured()) {
+  const health = await checkSupabaseConnection()
+  if (health.ok) {
     const cloud = await deleteCloudDocument(id)
     if (!cloud.ok) {
       return { ok: true, error: `Deleted locally. Cloud delete failed: ${cloud.error}` }

@@ -11,6 +11,10 @@ import {
   importDocumentsToSupabase,
   parseImportDocuments,
   isSupabaseServerConfigured,
+  checkSupabaseServerHealth,
+  fetchServerDocuments,
+  upsertServerDocument,
+  deleteServerDocument,
 } from './lib/supabaseServer.js'
 
 function readRequestBody(req) {
@@ -119,6 +123,113 @@ function attachAIHandlers(middlewares, env) {
         res.end()
       }
     }
+  })
+
+  middlewares.use('/api/documents/health', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.statusCode = 405
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, message: 'Method not allowed' }))
+      return
+    }
+    if (!isSupabaseServerConfigured(env)) {
+      res.statusCode = 503
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({
+        ok: false,
+        configured: false,
+        message: 'Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in .env',
+        statusLabel: 'Local Save Only',
+      }))
+      return
+    }
+    const result = await checkSupabaseServerHealth(env)
+    res.statusCode = result.ok ? 200 : 502
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify(result))
+  })
+
+  middlewares.use('/api/documents/list', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.statusCode = 405
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ docs: [], error: 'Method not allowed' }))
+      return
+    }
+    if (!isSupabaseServerConfigured(env)) {
+      res.statusCode = 503
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ docs: [], error: 'Supabase is not configured' }))
+      return
+    }
+    const { docs, error } = await fetchServerDocuments(env)
+    res.statusCode = error ? 502 : 200
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ docs, error }))
+  })
+
+  middlewares.use('/api/documents/save', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    if (req.method !== 'POST') {
+      res.statusCode = 405
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: 'Method not allowed' }))
+      return
+    }
+    if (!isSupabaseServerConfigured(env)) {
+      res.statusCode = 503
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: 'Supabase is not configured' }))
+      return
+    }
+    try {
+      const raw = await readRequestBody(req)
+      const doc = raw.length ? JSON.parse(raw.toString('utf8')) : null
+      if (!doc?.id || !doc?.name) {
+        res.statusCode = 400
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ ok: false, error: 'Invalid document payload' }))
+        return
+      }
+      const result = await upsertServerDocument(doc, env)
+      res.statusCode = result.ok ? 200 : 502
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify(result))
+    } catch (err) {
+      res.statusCode = 400
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : 'Save failed' }))
+    }
+  })
+
+  middlewares.use('/api/documents/delete', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    if (req.method !== 'POST' && req.method !== 'DELETE') {
+      res.statusCode = 405
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: 'Method not allowed' }))
+      return
+    }
+    if (!isSupabaseServerConfigured(env)) {
+      res.statusCode = 503
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: 'Supabase is not configured' }))
+      return
+    }
+    const url = new URL(req.url, 'http://localhost')
+    const id = url.searchParams.get('id')
+    if (!id) {
+      res.statusCode = 400
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: 'Document id is required' }))
+      return
+    }
+    const result = await deleteServerDocument(id, env)
+    res.statusCode = result.ok ? 200 : 502
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify(result))
   })
 
   middlewares.use('/api/documents/import', async (req, res) => {

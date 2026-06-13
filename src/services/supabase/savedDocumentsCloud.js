@@ -3,7 +3,32 @@ import { isSupabaseConfigured } from '../../config/env.js'
 import { rowToDocument, documentToRow } from '../../../lib/savedDocumentMapper.js'
 import { formatSupabaseError } from '../../../lib/supabaseServer.js'
 
+async function fetchFromServer(path, options = {}) {
+  const response = await fetch(path, {
+    cache: 'no-store',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  })
+  const data = await response.json().catch(() => null)
+  return { response, data }
+}
+
 export async function fetchCloudDocuments() {
+  try {
+    const { response, data } = await fetchFromServer('/api/documents/list')
+    if (response.ok && data && !data.error) {
+      return { docs: data.docs || [], error: null }
+    }
+    if (response.status !== 404 && data?.error) {
+      return { docs: [], error: data.error }
+    }
+  } catch {
+    // fall through to direct client
+  }
+
   if (!isSupabaseConfigured()) return { docs: [], error: null }
 
   const supabase = getSupabaseClient()
@@ -19,6 +44,19 @@ export async function fetchCloudDocuments() {
 }
 
 export async function upsertCloudDocument(doc) {
+  try {
+    const { response, data } = await fetchFromServer('/api/documents/save', {
+      method: 'POST',
+      body: JSON.stringify(doc),
+    })
+    if (response.ok && data?.ok) return { ok: true, error: null }
+    if (response.status !== 404 && data?.error) {
+      return { ok: false, error: data.error }
+    }
+  } catch {
+    // fall through
+  }
+
   if (!isSupabaseConfigured()) return { ok: false, error: 'Cloud save not configured' }
 
   const supabase = getSupabaseClient()
@@ -50,6 +88,18 @@ export async function insertCloudDocument(doc) {
 }
 
 export async function deleteCloudDocument(id) {
+  try {
+    const { response, data } = await fetchFromServer(`/api/documents/delete?id=${encodeURIComponent(id)}`, {
+      method: 'POST',
+    })
+    if (response.ok && data?.ok) return { ok: true, error: null }
+    if (response.status !== 404 && data?.error) {
+      return { ok: false, error: data.error }
+    }
+  } catch {
+    // fall through
+  }
+
   if (!isSupabaseConfigured()) return { ok: false, error: 'Cloud save not configured' }
 
   const supabase = getSupabaseClient()

@@ -3,18 +3,50 @@ import { ENV, isSupabaseConfigured } from '../../config/env.js'
 import { formatSupabaseError } from '../../../lib/supabaseServer.js'
 
 let client = null
+let clientUrl = ''
+let clientKey = ''
 
 export function getSupabaseClient() {
   if (!isSupabaseConfigured()) return null
-  if (!client) {
-    client = createClient(ENV.supabaseUrl.trim(), ENV.supabaseAnonKey.trim(), {
+
+  const url = ENV.supabaseUrl.trim()
+  const key = ENV.supabaseAnonKey.trim()
+
+  if (!client || clientUrl !== url || clientKey !== key) {
+    client = createClient(url, key, {
       auth: { persistSession: false, autoRefreshToken: false },
     })
+    clientUrl = url
+    clientKey = key
   }
+
   return client
 }
 
 export async function checkSupabaseConnection() {
+  try {
+    const response = await fetch('/api/documents/health', { cache: 'no-store' })
+    const data = await response.json().catch(() => null)
+    if (response.ok && data) {
+      return {
+        ok: Boolean(data.ok),
+        configured: Boolean(data.configured),
+        message: data.message || (data.ok ? 'Cloud storage connected' : 'Connection failed'),
+        statusLabel: data.statusLabel || (data.ok ? 'Cloud Save Active' : 'Supabase Not Connected'),
+      }
+    }
+    if (response.status !== 404 && data?.message) {
+      return {
+        ok: false,
+        configured: Boolean(data.configured),
+        message: data.message,
+        statusLabel: data.statusLabel || 'Supabase Not Connected',
+      }
+    }
+  } catch {
+    // fall through to direct client check
+  }
+
   if (!isSupabaseConfigured()) {
     return {
       ok: false,
