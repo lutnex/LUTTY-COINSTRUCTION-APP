@@ -174,7 +174,6 @@ function inferUnit(name = '') {
   return 'nr'
 }
 
-/** Extract from full chat history (user + assistant messages). */
 export function extractAgreedPricesFromChat(msgs = []) {
   const all = []
   const seen = new Set()
@@ -210,4 +209,45 @@ export function extractAgreedPricesFromChat(msgs = []) {
 
 export function hasExtractablePrices(msgs = []) {
   return extractAgreedPricesFromChat(msgs).length > 0
+}
+
+/** Pull unit rates from structured BOQ rows in an AI extract. */
+export function extractPricesFromBoqExtract(extract) {
+  if (!extract) return []
+  const rows = Array.isArray(extract.boqRows) ? extract.boqRows
+    : Array.isArray(extract.boqItems) ? extract.boqItems : []
+  const items = []
+  const seen = new Set()
+  for (const row of rows) {
+    const rate = parsePriceValue(row.rate)
+    if (!rate || !row.desc) continue
+    addItem(items, seen, makeItem({
+      name: row.desc,
+      specification: row.specification || '',
+      unit: row.unit || 'nr',
+      price: rate,
+      category: inferCategory(row.desc, row.section || ''),
+      source: PRICE_ITEM_SOURCES.AI_SUGGESTED,
+      notes: row.section ? `BOQ: ${row.section}` : 'From AI BOQ',
+    }))
+  }
+  return items
+}
+
+/** Merge chat-agreed prices, extract.agreedPrices, and BOQ row rates. */
+export function extractAllPricesFromContext(extract, msgs = []) {
+  const all = []
+  const seen = new Set()
+  const sources = [
+    ...(extract?.agreedPrices || []),
+    ...extractPricesFromBoqExtract(extract),
+    ...extractAgreedPricesFromChat(msgs),
+  ]
+  for (const item of sources) {
+    const key = `${item.material}|${item.specification}|${item.unit}|${item.category}`.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    all.push(item)
+  }
+  return all
 }

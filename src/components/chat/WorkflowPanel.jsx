@@ -35,11 +35,16 @@ export default function WorkflowPanel({
 
   const run = (actionId, opts = {}) => {
     if (busyAction) return
+    if (!onAction) {
+      toast.warn('Action unavailable', 'Workflow handler is not connected — refresh the page')
+      logWorkflowAction(actionId, { error: 'no-handler' })
+      return
+    }
     logWorkflowAction(actionId, { phase: 'click', hasExtract: Boolean(extract), opts })
     setBusyAction(actionId)
     let asyncAction = false
     try {
-      const result = onAction?.(actionId, extract, opts)
+      const result = onAction(actionId, extract, opts)
       if (result && typeof result.then === 'function') {
         asyncAction = true
         result
@@ -62,8 +67,12 @@ export default function WorkflowPanel({
 
   const handlePDF = () => {
     if (pdfBusy || busyAction) return
+    if (!onAction) {
+      toast.warn('Action unavailable', 'Workflow handler is not connected')
+      return
+    }
     setPdfBusy(true)
-    const result = onAction?.(WORKFLOW_ACTIONS.EXPORT_PDF, extract)
+    const result = onAction(WORKFLOW_ACTIONS.EXPORT_PDF, extract)
     const done = () => setPdfBusy(false)
     if (result && typeof result.then === 'function') {
       result.then(r => finish(WORKFLOW_ACTIONS.EXPORT_PDF, r)).catch(err => {
@@ -77,8 +86,7 @@ export default function WorkflowPanel({
   }
 
   const confColor = { high: C.green, medium: C.amber, low: C.red }[extract.confidence] || C.textDim
-  const canImportBoq = hasBoqOrEstimateData(extract) || extract.boqRows?.length
-  const canImportVariation = hasVariationData(extract)
+  const variationCount = extract.variationItems?.length || 0
 
   return (
     <div style={{ marginTop: 10, background: 'linear-gradient(135deg,rgba(10,42,67,.94),rgba(30,40,56,.97))', border: `1px solid rgba(245,158,11,.3)`, borderRadius: 10, padding: '13px 15px', animation: 'fadeSlideIn .3s ease' }}>
@@ -118,9 +126,9 @@ export default function WorkflowPanel({
             <div style={{ fontSize: 9, color: C.textFaint, marginTop: 1 }}>contract sum</div>
           </div>
         )}
-        {extract.variationItems?.length > 0 && (
+        {variationCount > 0 && (
           <div style={{ background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.07)', borderRadius: 6, padding: '5px 10px', textAlign: 'center' }}>
-            <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 15, color: C.sky, fontWeight: 500 }}>{extract.variationItems.length}</div>
+            <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 15, color: C.sky, fontWeight: 500 }}>{variationCount}</div>
             <div style={{ fontSize: 9, color: C.textFaint, marginTop: 1 }}>variation lines</div>
           </div>
         )}
@@ -133,9 +141,7 @@ export default function WorkflowPanel({
       )}
 
       <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-        {canImportBoq && (
-          <ActionBtn label="📋 Import to BOQ" color="green" busy={busyAction === WORKFLOW_ACTIONS.IMPORT_BOQ} onClick={() => run(WORKFLOW_ACTIONS.IMPORT_BOQ)} />
-        )}
+        <ActionBtn label="📋 Import to BOQ" color="green" busy={busyAction === WORKFLOW_ACTIONS.IMPORT_BOQ} onClick={() => run(WORKFLOW_ACTIONS.IMPORT_BOQ)} />
         <ActionBtn label="📄 Review" color="amber" busy={busyAction === WORKFLOW_ACTIONS.REVIEW} onClick={() => run(WORKFLOW_ACTIONS.REVIEW)} />
         <ActionBtn label="💰 Extract Prices from Chat" color="green" busy={busyAction === WORKFLOW_ACTIONS.EXTRACT_PRICES} onClick={() => run(WORKFLOW_ACTIONS.EXTRACT_PRICES)} />
         <ActionBtn label="💾 Save Prices to Profile" color="green" busy={busyAction === WORKFLOW_ACTIONS.SAVE_PRICES_PROFILE} onClick={() => run(WORKFLOW_ACTIONS.SAVE_PRICES_PROFILE)} />
@@ -156,14 +162,12 @@ export default function WorkflowPanel({
           onClick={() => run(WORKFLOW_ACTIONS.DETAILED_BOQ)}
         />
         <ActionBtn label="→ Export to Document Generator" color="amber" busy={busyAction === WORKFLOW_ACTIONS.EXPORT_DOCGEN} onClick={() => run(WORKFLOW_ACTIONS.EXPORT_DOCGEN)} />
-        {canImportVariation && (
-          <ActionBtn
-            label={`📝 Import to Variation Order (${extract.variationItems.length})`}
-            color="sky"
-            busy={busyAction === WORKFLOW_ACTIONS.IMPORT_VARIATION}
-            onClick={() => run(WORKFLOW_ACTIONS.IMPORT_VARIATION)}
-          />
-        )}
+        <ActionBtn
+          label={variationCount ? `📝 Import to Variation Order (${variationCount})` : '📝 Import to Variation Order'}
+          color="sky"
+          busy={busyAction === WORKFLOW_ACTIONS.IMPORT_VARIATION}
+          onClick={() => run(WORKFLOW_ACTIONS.IMPORT_VARIATION)}
+        />
         <ActionBtn label="💾 Save Project" color="purple" busy={busyAction === WORKFLOW_ACTIONS.SAVE_PROJECT} onClick={() => run(WORKFLOW_ACTIONS.SAVE_PROJECT)} />
         <ActionBtn label={pdfBusy ? 'Exporting…' : '⬇ Export PDF'} color="outline" disabled={pdfBusy || Boolean(busyAction)} onClick={handlePDF} />
       </div>

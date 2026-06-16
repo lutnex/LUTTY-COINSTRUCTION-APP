@@ -19,7 +19,9 @@ import MarketTrendsPage from './components/tools/MarketTrendsPage.jsx'
 import QSExportWorkflow from './components/boq/QSExportWorkflow.jsx'
 import SaveProjectDialog from './components/projects/SaveProjectDialog.jsx'
 import SavePricesToProfileDialog from './components/pricing/SavePricesToProfileDialog.jsx'
+import ExtractPricesDialog from './components/pricing/ExtractPricesDialog.jsx'
 import PricingSourceDialog from './components/pricing/PricingSourceDialog.jsx'
+import WorkflowReviewDialog from './components/chat/WorkflowReviewDialog.jsx'
 import { useChat } from './hooks/useChat.js'
 import { useAIHealth } from './hooks/useAIHealth.js'
 import { useAIUsage } from './hooks/useAIUsage.js'
@@ -61,7 +63,7 @@ import {
   setActiveProfileId,
   savePriceProfileState,
 } from './utils/priceStore.js'
-import { extractAgreedPricesFromChat } from './utils/priceExtraction.js'
+import { extractAgreedPricesFromChat, extractAllPricesFromContext } from './utils/priceExtraction.js'
 import { loadAllPriceProfiles, persistPriceProfiles } from './services/priceProfilesService.js'
 import { fetchMaterialPrices } from './services/materialPricesService.js'
 import { saveAppSession, loadAppSession, clearAppSession } from './utils/sessionStore.js'
@@ -120,8 +122,11 @@ function AppShellInner({ projState, dispatch }) {
   }, [])
   const [livePrices, setLivePrices] = useState([])
   const [savePricesOpen, setSavePricesOpen] = useState(false)
+  const [extractPricesOpen, setExtractPricesOpen] = useState(false)
   const [extractedPrices, setExtractedPrices] = useState([])
   const [pricingSourceOpen, setPricingSourceOpen] = useState(false)
+  const [workflowReviewOpen, setWorkflowReviewOpen] = useState(false)
+  const [workflowReviewData, setWorkflowReviewData] = useState(null)
   const [qsWorkflowOpen, setQsWorkflowOpen] = useState(false)
   const [qsWorkflowData, setQsWorkflowData] = useState(null)
   const [qsInitialStep, setQsInitialStep] = useState(0)
@@ -423,19 +428,19 @@ function AppShellInner({ projState, dispatch }) {
   }, [intelligence, toast])
 
   const setPresentationStyle = useCallback((style) => {
-    setWorkflowState(prev => ({ ...prev, presentationStyle: style }))
-    intelligence.setData({
-      ...intelligence.data,
-      workflow: { ...(intelligence.data.workflow || {}), presentationStyle: style },
-      presentationStyle: style,
+    flushSync(() => {
+      setWorkflowState(prev => ({ ...prev, presentationStyle: style }))
+      intelligence.setData({
+        ...intelligence.data,
+        workflow: { ...(intelligence.data.workflow || {}), presentationStyle: style },
+        presentationStyle: style,
+      })
     })
     logWorkflowAction('set-presentation-style', { style })
   }, [intelligence])
 
   const extractPricesFromContext = useCallback((extract) => {
-    if (extract?.agreedPrices?.length) return extract.agreedPrices
-    if (extract?.hasAgreedPrices && extract.agreedPrices) return extract.agreedPrices
-    return extractAgreedPricesFromChat(chat.msgs)
+    return extractAllPricesFromContext(extract, chat.msgs)
   }, [chat.msgs])
 
   const handleOpenSaveProject = useCallback((extract) => {
@@ -671,6 +676,10 @@ function AppShellInner({ projState, dispatch }) {
     setQsWorkflowData(null)
     setSaveProjectOpen(false)
     setSaveProjectExtract(null)
+    setSavePricesOpen(false)
+    setExtractPricesOpen(false)
+    setWorkflowReviewOpen(false)
+    setWorkflowReviewData(null)
     setExtractedPrices([])
     setTab('chat')
     toast.info('New project started', 'Chat and workflow cleared — use this when you want a fresh start')
@@ -720,7 +729,7 @@ function AppShellInner({ projState, dispatch }) {
   const handlePDFExport = useCallback(async (extract) => {
     const tid = toast.loading('Generating PDF…')
     setPdfStatus('Preparing…')
-    intelligence.mergeFromExtract(extract)
+    applyExtractNow(extract)
     const payload = intelligence.getDocGenPayload({ docType: 'estimate', source: 'ai-export' })
     const style = workflowState.presentationStyle || intelligence.data?.workflow?.presentationStyle
     const data = {
@@ -762,7 +771,28 @@ function AppShellInner({ projState, dispatch }) {
       toast.fail(tid, 'PDF failed', e?.message || 'Try the DocGen tab instead')
     }
     setPdfStatus(null)
-  }, [toast, companyLogo, intelligence, workflowState.presentationStyle])
+  }, [toast, companyLogo, intelligence, workflowState.presentationStyle, applyExtractNow])
+
+  const handleConfirmExtractedPrices = useCallback((items) => {
+    setExtractedPrices(items)
+    setExtractPricesOpen(false)
+    toast.success(`${items.length} price(s) confirmed`, 'Use Save Prices to Profile when ready')
+    logWorkflowAction(WORKFLOW_ACTIONS.EXTRACT_PRICES, { confirmed: items.length })
+  }, [toast])
+
+  const handleWorkflowReviewApprove = useCallback(() => {
+    intelligence.setData({
+      ...intelligence.data,
+      workflow: {
+        ...(intelligence.data.workflow || {}),
+        reviewedAt: new Date().toISOString(),
+        userApprovedReview: true,
+      },
+    })
+    setWorkflowReviewOpen(false)
+    toast.success('Review approved', 'You can now choose pricing source and export')
+    logWorkflowAction(WORKFLOW_ACTIONS.REVIEW, { approved: true })
+  }, [intelligence, toast])
 
   const handleWorkflowAction = useCallback((actionId, extract, opts = {}) => {
     logWorkflowAction(actionId, {
@@ -789,22 +819,28 @@ function AppShellInner({ projState, dispatch }) {
             toast.warn('Nothing to review', 'Generate BOQ or estimate data in chat first')
             return { ok: false }
           }
-          applyExtractNow(extract)
-          handleOpenQSWorkflow(extract, { initialStep: 0 })
+          const merged = applyExtractNow(extract)
+          const reviewData = prepareWorkflowData(merged, extract, {
+            presentationStyle: workflowState.presentationStyle || intelligence.data?.workflow?.presentationStyle,
+            pricingConfig: intelligence.data?.pricingConfig,
+          })
+          flushSync(() => {
+            setWorkflowReviewData(reviewData)
+            setWorkflowReviewOpen(true)
+          })
           return { ok: true }
         }
 
         case WORKFLOW_ACTIONS.EXTRACT_PRICES: {
           const extracted = extractPricesFromContext(extract)
           if (!extracted.length) {
-            toast.warn('No prices found', 'Agree rates in chat first (e.g. Cement 42.5R = 110 GHS/bag)')
+            toast.warn('No prices found', 'Agree rates in chat or generate a priced BOQ first')
             return { ok: false }
           }
           flushSync(() => {
             setExtractedPrices(extracted)
-            setSavePricesOpen(true)
+            setExtractPricesOpen(true)
           })
-          toast.success(`${extracted.length} price(s) extracted`, 'Review and confirm before saving')
           return { ok: true }
         }
 
@@ -844,10 +880,9 @@ function AppShellInner({ projState, dispatch }) {
             toast.warn('No BOQ data', 'Generate a BOQ or estimate before choosing presentation style')
             return { ok: false }
           }
-          setPresentationStyle(PRESENTATION_STYLES.PREMIUM)
           applyExtractNow(extract)
-          handleOpenQSWorkflow(extract, { initialStep: 3, initialStyle: PRESENTATION_STYLES.PREMIUM })
-          toast.success('Style selected', 'Premium Quotation — summarized client-facing totals')
+          setPresentationStyle(PRESENTATION_STYLES.PREMIUM)
+          toast.success('Style selected', 'Premium Quotation — summarized client-facing category totals')
           return { ok: true }
         }
 
@@ -856,9 +891,8 @@ function AppShellInner({ projState, dispatch }) {
             toast.warn('No BOQ data', 'Generate a BOQ or estimate before choosing presentation style')
             return { ok: false }
           }
-          setPresentationStyle(PRESENTATION_STYLES.DETAILED)
           applyExtractNow(extract)
-          handleOpenQSWorkflow(extract, { initialStep: 3, initialStyle: PRESENTATION_STYLES.DETAILED })
+          setPresentationStyle(PRESENTATION_STYLES.DETAILED)
           toast.success('Style selected', 'Detailed BOQ — full item-by-item breakdown')
           return { ok: true }
         }
@@ -1309,6 +1343,21 @@ function AppShellInner({ projState, dispatch }) {
         initialStep={qsInitialStep}
         initialStyle={qsInitialStyle}
         autoOpenCompare={qsAutoCompare}
+      />
+
+      <ExtractPricesDialog
+        open={extractPricesOpen}
+        items={extractedPrices}
+        onConfirm={handleConfirmExtractedPrices}
+        onCancel={() => setExtractPricesOpen(false)}
+      />
+
+      <WorkflowReviewDialog
+        open={workflowReviewOpen}
+        data={workflowReviewData}
+        presentationStyle={workflowState.presentationStyle || intelligence.data?.workflow?.presentationStyle}
+        onApprove={handleWorkflowReviewApprove}
+        onClose={() => setWorkflowReviewOpen(false)}
       />
 
       <SavePricesToProfileDialog
