@@ -1,5 +1,6 @@
 // src/App.jsx
 import { useState, useCallback, useEffect, useMemo } from 'react'
+import { flushSync } from 'react-dom'
 import { ToastProvider, useToast } from './context/ToastContext.jsx'
 import { ProjectProvider, useProjects } from './context/ProjectContext.jsx'
 import { ProjectIntelligenceProvider, useProjectIntelligence } from './context/ProjectIntelligenceContext.jsx'
@@ -38,6 +39,9 @@ import {
   saveWorkflowSession,
   loadWorkflowSession,
   clearWorkflowSession,
+  buildMergedFromExtract,
+  canOpenQsWorkflow,
+  ensureBoqRows,
 } from './utils/workflowActions.js'
 import { serializeChatMessages } from './utils/sessionStore.js'
 
@@ -383,23 +387,39 @@ function AppShellInner({ projState, dispatch }) {
 
   const chat = useChat({ prices, onUsage: handleUsage, onExtract: handleAIExtract })
 
+  const applyExtractNow = useCallback((extract, opts = {}) => {
+    const merged = intelligence.recomputePricing(
+      buildMergedFromExtract(intelligence.data, extract, opts),
+    )
+    flushSync(() => intelligence.setData(merged))
+    return merged
+  }, [intelligence])
+
   const handleOpenQSWorkflow = useCallback((source, opts = {}) => {
-    const merged = prepareWorkflowData(intelligence.data, source, {
-      presentationStyle: opts.initialStyle || intelligence.data?.workflow?.presentationStyle,
-      pricingConfig: intelligence.data?.pricingConfig,
-    })
-    if (!merged.boqItems?.length && !merged.assumptions?.length && !merged.exclusions?.length) {
-      logWorkflowAction('open-qs-workflow-blocked', { reason: 'no-data' })
-      toast.warn('Nothing to review', 'Generate a BOQ or estimate in chat first')
+    try {
+      const merged = prepareWorkflowData(intelligence.data, source, {
+        presentationStyle: opts.initialStyle || intelligence.data?.workflow?.presentationStyle,
+        pricingConfig: intelligence.data?.pricingConfig,
+      })
+      if (!canOpenQsWorkflow(merged, source)) {
+        logWorkflowAction('open-qs-workflow-blocked', { reason: 'no-data', rows: merged.boqItems?.length })
+        toast.warn('Nothing to review', 'Generate a BOQ or estimate in chat first')
+        return false
+      }
+      flushSync(() => {
+        setQsInitialStep(opts.initialStep ?? 0)
+        setQsInitialStyle(opts.initialStyle ?? merged.presentationStyle ?? null)
+        setQsAutoCompare(Boolean(opts.autoCompare))
+        setQsWorkflowData(merged)
+        setQsWorkflowOpen(true)
+      })
+      logWorkflowAction('open-qs-workflow', { step: opts.initialStep ?? 0, style: opts.initialStyle, rows: merged.boqItems?.length })
+      return true
+    } catch (err) {
+      console.error('[WorkflowAction] open-qs-workflow failed:', err)
+      toast.error('Workflow failed', err?.message || 'Could not open review panel')
       return false
     }
-    setQsInitialStep(opts.initialStep ?? 0)
-    setQsInitialStyle(opts.initialStyle ?? merged.presentationStyle ?? null)
-    setQsAutoCompare(Boolean(opts.autoCompare))
-    setQsWorkflowData(merged)
-    setQsWorkflowOpen(true)
-    logWorkflowAction('open-qs-workflow', { step: opts.initialStep ?? 0, style: opts.initialStyle, rows: merged.boqItems?.length })
-    return true
   }, [intelligence, toast])
 
   const setPresentationStyle = useCallback((style) => {
@@ -744,145 +764,158 @@ function AppShellInner({ projState, dispatch }) {
     setPdfStatus(null)
   }, [toast, companyLogo, intelligence, workflowState.presentationStyle])
 
-  const handleWorkflowAction = useCallback(async (actionId, extract, opts = {}) => {
+  const handleWorkflowAction = useCallback((actionId, extract, opts = {}) => {
     logWorkflowAction(actionId, {
       hasBoq: hasBoqOrEstimateData(extract),
       hasVariation: hasVariationData(extract),
-      boqRows: extract?.boqRows?.length || 0,
+      boqRows: ensureBoqRows(extract).length,
     })
 
-    switch (actionId) {
-      case WORKFLOW_ACTIONS.IMPORT_BOQ: {
-        if (!hasBoqOrEstimateData(extract) && !extract?.boqRows?.length) {
-          toast.warn('No BOQ data', 'Ask the AI to generate a BOQ or estimate first')
+    try {
+      switch (actionId) {
+        case WORKFLOW_ACTIONS.IMPORT_BOQ: {
+          if (!hasBoqOrEstimateData(extract) && !ensureBoqRows(extract).length) {
+            toast.warn('No BOQ data', 'Ask the AI to generate a BOQ or estimate first')
+            return { ok: false }
+          }
+          const merged = applyExtractNow(extract, { replaceBoq: true })
+          const count = ensureBoqRows(extract).length || merged.boqItems?.length || 0
+          toast.success('Imported to BOQ Builder', `${count} lines with assumptions and notes`)
+          return { navigate: 'boq' }
+        }
+
+        case WORKFLOW_ACTIONS.REVIEW: {
+          if (!hasBoqOrEstimateData(extract)) {
+            toast.warn('Nothing to review', 'Generate BOQ or estimate data in chat first')
+            return { ok: false }
+          }
+          applyExtractNow(extract)
+          handleOpenQSWorkflow(extract, { initialStep: 0 })
+          return { ok: true }
+        }
+
+        case WORKFLOW_ACTIONS.EXTRACT_PRICES: {
+          const extracted = extractPricesFromContext(extract)
+          if (!extracted.length) {
+            toast.warn('No prices found', 'Agree rates in chat first (e.g. Cement 42.5R = 110 GHS/bag)')
+            return { ok: false }
+          }
+          flushSync(() => {
+            setExtractedPrices(extracted)
+            setSavePricesOpen(true)
+          })
+          toast.success(`${extracted.length} price(s) extracted`, 'Review and confirm before saving')
+          return { ok: true }
+        }
+
+        case WORKFLOW_ACTIONS.SAVE_PRICES_PROFILE: {
+          const extracted = extractedPrices.length ? extractedPrices : extractPricesFromContext(extract)
+          if (!extracted.length) {
+            toast.warn('No prices to save', 'Use Extract Prices from Chat first')
+            return { ok: false }
+          }
+          flushSync(() => {
+            setExtractedPrices(extracted)
+            setSavePricesOpen(true)
+          })
+          return { ok: true }
+        }
+
+        case WORKFLOW_ACTIONS.CHOOSE_PRICING_SOURCE: {
+          flushSync(() => setPricingSourceOpen(true))
+          return { ok: true }
+        }
+
+        case WORKFLOW_ACTIONS.COMPARE_PROFILE_MARKET: {
+          if (!hasBoqOrEstimateData(extract)) {
+            toast.warn('No BOQ to price', 'Generate a BOQ in chat before comparing prices')
+            return { ok: false }
+          }
+          if (!livePrices?.length) {
+            toast.warn('Live market prices unavailable', 'Use profile or manual prices instead')
+          }
+          applyExtractNow(extract)
+          handleOpenQSWorkflow(extract, { initialStep: 1, autoCompare: true })
+          return { ok: true }
+        }
+
+        case WORKFLOW_ACTIONS.PREMIUM_QUOTATION: {
+          if (!hasBoqOrEstimateData(extract)) {
+            toast.warn('No BOQ data', 'Generate a BOQ or estimate before choosing presentation style')
+            return { ok: false }
+          }
+          setPresentationStyle(PRESENTATION_STYLES.PREMIUM)
+          applyExtractNow(extract)
+          handleOpenQSWorkflow(extract, { initialStep: 3, initialStyle: PRESENTATION_STYLES.PREMIUM })
+          toast.success('Style selected', 'Premium Quotation — summarized client-facing totals')
+          return { ok: true }
+        }
+
+        case WORKFLOW_ACTIONS.DETAILED_BOQ: {
+          if (!hasBoqOrEstimateData(extract)) {
+            toast.warn('No BOQ data', 'Generate a BOQ or estimate before choosing presentation style')
+            return { ok: false }
+          }
+          setPresentationStyle(PRESENTATION_STYLES.DETAILED)
+          applyExtractNow(extract)
+          handleOpenQSWorkflow(extract, { initialStep: 3, initialStyle: PRESENTATION_STYLES.DETAILED })
+          toast.success('Style selected', 'Detailed BOQ — full item-by-item breakdown')
+          return { ok: true }
+        }
+
+        case WORKFLOW_ACTIONS.EXPORT_DOCGEN: {
+          if (!hasBoqOrEstimateData(extract)) {
+            toast.warn('No export data', 'Generate a BOQ or estimate in chat first')
+            return { ok: false }
+          }
+          const style = workflowState.presentationStyle || intelligence.data?.workflow?.presentationStyle
+          if (!style) {
+            toast.warn('Select document style first', 'Choose Premium Quotation or Detailed BOQ before export')
+            return { ok: false }
+          }
+          applyExtractNow(extract)
+          handleOpenQSWorkflow(extract, { initialStep: 4, initialStyle: style })
+          return { ok: true }
+        }
+
+        case WORKFLOW_ACTIONS.SAVE_PROJECT: {
+          applyExtractNow(extract)
+          flushSync(() => {
+            setSaveProjectExtract(extract)
+            setSaveProjectOpen(true)
+          })
+          return { ok: true }
+        }
+
+        case WORKFLOW_ACTIONS.EXPORT_PDF: {
+          if (!hasBoqOrEstimateData(extract) && !extract?.contractSum) {
+            toast.warn('Nothing to export', 'Generate an estimate or BOQ in chat first')
+            return { ok: false }
+          }
+          return handlePDFExport(extract)
+        }
+
+        case WORKFLOW_ACTIONS.IMPORT_VARIATION: {
+          if (!extract?.variationItems?.length) {
+            toast.warn('No variation items', 'Ask the AI to build a variation schedule first')
+            return { ok: false }
+          }
+          return handleImportVariation(extract.variationItems)
+        }
+
+        default:
+          toast.warn('Not configured', 'This feature is not fully configured yet.')
           return { ok: false }
-        }
-        intelligence.mergeFromExtract(extract, { replaceBoq: true })
-        toast.success('Imported to BOQ Builder', `${extract.boqRows?.length || 0} lines with assumptions and notes`)
-        return { navigate: 'boq' }
       }
-
-      case WORKFLOW_ACTIONS.REVIEW: {
-        if (!hasBoqOrEstimateData(extract)) {
-          toast.warn('Nothing to review', 'Generate BOQ or estimate data in chat first')
-          return { ok: false }
-        }
-        intelligence.mergeFromExtract(extract)
-        handleOpenQSWorkflow(extract, { initialStep: 4 })
-        return { ok: true }
-      }
-
-      case WORKFLOW_ACTIONS.EXTRACT_PRICES: {
-        const extracted = extractPricesFromContext(extract)
-        if (!extracted.length) {
-          toast.warn('No prices found', 'Agree rates in chat first (e.g. Cement 42.5R = 110 GHS/bag)')
-          return { ok: false }
-        }
-        setExtractedPrices(extracted)
-        setSavePricesOpen(true)
-        toast.success(`${extracted.length} price(s) extracted`, 'Review and confirm before saving')
-        return { ok: true }
-      }
-
-      case WORKFLOW_ACTIONS.SAVE_PRICES_PROFILE: {
-        const extracted = extractedPrices.length ? extractedPrices : extractPricesFromContext(extract)
-        if (!extracted.length) {
-          toast.warn('No prices to save', 'Use Extract Prices from Chat first')
-          return { ok: false }
-        }
-        setExtractedPrices(extracted)
-        setSavePricesOpen(true)
-        return { ok: true }
-      }
-
-      case WORKFLOW_ACTIONS.CHOOSE_PRICING_SOURCE: {
-        setPricingSourceOpen(true)
-        return { ok: true }
-      }
-
-      case WORKFLOW_ACTIONS.COMPARE_PROFILE_MARKET: {
-        if (!hasBoqOrEstimateData(extract)) {
-          toast.warn('No BOQ to price', 'Generate a BOQ in chat before comparing prices')
-          return { ok: false }
-        }
-        if (!livePrices?.length) {
-          toast.warn('Live market prices unavailable', 'Use profile or manual prices instead')
-        }
-        intelligence.mergeFromExtract(extract)
-        handleOpenQSWorkflow(extract, { initialStep: 1, autoCompare: true })
-        return { ok: true }
-      }
-
-      case WORKFLOW_ACTIONS.PREMIUM_QUOTATION: {
-        if (!hasBoqOrEstimateData(extract)) {
-          toast.warn('No BOQ data', 'Generate a BOQ or estimate before choosing presentation style')
-          return { ok: false }
-        }
-        setPresentationStyle(PRESENTATION_STYLES.PREMIUM)
-        intelligence.mergeFromExtract(extract)
-        handleOpenQSWorkflow(extract, { initialStep: 3, initialStyle: PRESENTATION_STYLES.PREMIUM })
-        toast.success('Style selected', 'Premium Quotation — summarized client-facing totals')
-        return { ok: true }
-      }
-
-      case WORKFLOW_ACTIONS.DETAILED_BOQ: {
-        if (!hasBoqOrEstimateData(extract)) {
-          toast.warn('No BOQ data', 'Generate a BOQ or estimate before choosing presentation style')
-          return { ok: false }
-        }
-        setPresentationStyle(PRESENTATION_STYLES.DETAILED)
-        intelligence.mergeFromExtract(extract)
-        handleOpenQSWorkflow(extract, { initialStep: 3, initialStyle: PRESENTATION_STYLES.DETAILED })
-        toast.success('Style selected', 'Detailed BOQ — full item-by-item breakdown')
-        return { ok: true }
-      }
-
-      case WORKFLOW_ACTIONS.EXPORT_DOCGEN: {
-        if (!hasBoqOrEstimateData(extract)) {
-          toast.warn('No export data', 'Generate a BOQ or estimate in chat first')
-          return { ok: false }
-        }
-        const style = workflowState.presentationStyle || intelligence.data?.workflow?.presentationStyle
-        if (!style) {
-          toast.warn('Select document style first', 'Choose Premium Quotation or Detailed BOQ before export')
-          return { ok: false }
-        }
-        intelligence.mergeFromExtract(extract)
-        handleOpenQSWorkflow(extract, { initialStep: 4, initialStyle: style })
-        return { ok: true }
-      }
-
-      case WORKFLOW_ACTIONS.SAVE_PROJECT: {
-        intelligence.mergeFromExtract(extract)
-        setSaveProjectExtract(extract)
-        setSaveProjectOpen(true)
-        return { ok: true }
-      }
-
-      case WORKFLOW_ACTIONS.EXPORT_PDF: {
-        if (!hasBoqOrEstimateData(extract) && !extract?.contractSum) {
-          toast.warn('Nothing to export', 'Generate an estimate or BOQ in chat first')
-          return { ok: false }
-        }
-        await handlePDFExport(extract)
-        return { ok: true }
-      }
-
-      case WORKFLOW_ACTIONS.IMPORT_VARIATION: {
-        if (!extract?.variationItems?.length) {
-          toast.warn('No variation items', 'Ask the AI to build a variation schedule first')
-          return { ok: false }
-        }
-        return await handleImportVariation(extract.variationItems)
-      }
-
-      default:
-        toast.warn('Not configured', 'This feature is not fully configured yet.')
-        return { ok: false }
+    } catch (err) {
+      console.error(`[WorkflowAction] ${actionId} failed:`, err)
+      toast.error('Action failed', err?.message || 'Something went wrong — chat state preserved')
+      return { ok: false, error: err?.message }
     }
   }, [
-    extractPricesFromContext, extractedPrices.length, handleImportVariation, handleOpenQSWorkflow,
-    handlePDFExport, intelligence, livePrices, setPresentationStyle, toast, workflowState.presentationStyle,
+    applyExtractNow, extractPricesFromContext, extractedPrices.length, handleImportVariation,
+    handleOpenQSWorkflow, handlePDFExport, intelligence, livePrices, setPresentationStyle,
+    toast, workflowState.presentationStyle,
   ])
 
   // ── BOQ import from AI (legacy callback) ───────────────────────────────────

@@ -46,7 +46,9 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
   const base = prev ? { ...prev } : emptyProjectData()
   if (!extract) return base
 
-  const boqItems = (replaceBoq ? extract.boqRows : [...base.boqItems, ...(extract.boqRows || [])])
+  const incomingRows = Array.isArray(extract.boqRows) ? extract.boqRows : []
+  const baseItems = Array.isArray(base.boqItems) ? base.boqItems : []
+  const boqItems = (replaceBoq ? incomingRows : [...baseItems, ...incomingRows])
     .map((r, i) => normalizeBoqRow({ ...r, source: 'ai' }, i))
 
   const dedupe = []
@@ -190,8 +192,13 @@ export function loadIntelligence() {
     if (!raw) return null
     const data = JSON.parse(raw)
     if (data.boqItems) {
-      data.boqItems = data.boqItems.map((r, i) => normalizeBoqRow(r, i))
+      data.boqItems = Array.isArray(data.boqItems)
+        ? data.boqItems.map((r, i) => normalizeBoqRow(r, i))
+        : []
     }
+    if (!Array.isArray(data.assumptions)) data.assumptions = []
+    if (!Array.isArray(data.exclusions)) data.exclusions = []
+    if (!Array.isArray(data.provisional)) data.provisional = []
     return data
   } catch {
     return null

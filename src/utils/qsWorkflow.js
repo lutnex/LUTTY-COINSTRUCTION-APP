@@ -306,8 +306,13 @@ export function applyPriceInputsToRows(rows = [], priceInputs = [], { profileNam
   })
 }
 
+function asRowArray(value) {
+  if (Array.isArray(value)) return value
+  return []
+}
+
 export function buildClarificationPacket(data = {}) {
-  const rows = data.boqItems || data.boqRows || []
+  const rows = asRowArray(data.boqItems).length ? asRowArray(data.boqItems) : asRowArray(data.boqRows)
   const measured = rows.filter(r => parseFloat(r.qty) > 0 && r.supplyType !== SUPPLY_TYPES.EXCLUDED)
   const missingPrices = identifyMissingMaterialPrices(rows)
   const assumptions = data.assumptions || []
@@ -334,7 +339,7 @@ export function buildClarificationPacket(data = {}) {
 }
 
 export function validatePreExport(data = {}, { presentationStyle } = {}) {
-  const rows = data.boqItems || data.boqRows || []
+  const rows = asRowArray(data.boqItems).length ? asRowArray(data.boqItems) : asRowArray(data.boqRows)
   const packet = buildClarificationPacket(data)
   const missingPrices = rows.filter(rowNeedsPrice)
   const unconfirmedMarket = rows.filter(r => r.priceSource === PRICE_SOURCES.MARKET && !r.priceConfirmed)

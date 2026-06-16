@@ -132,11 +132,7 @@ export default function ChatPage({
                 <WorkflowPanel
                   extract={m.extract}
                   workflowState={workflowState}
-                  onAction={async (actionId, extract, opts) => {
-                    const result = await onWorkflowAction?.(actionId, extract, opts)
-                    if (result?.navigate) setTab?.(result.navigate)
-                    return result
-                  }}
+                  onAction={onWorkflowAction}
                   setTab={setTab}
                 />
               )}

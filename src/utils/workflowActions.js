@@ -45,15 +45,35 @@ export function ensureBoqRows(extract) {
   return []
 }
 
+export function canOpenQsWorkflow(merged = {}, extract = {}) {
+  return Boolean(
+    asRowArray(merged.boqItems).length ||
+    merged.assumptions?.length ||
+    merged.exclusions?.length ||
+    merged.provisional?.length ||
+    extract?.contractSum ||
+    merged.summaries?.commercial,
+  )
+}
+
+function asRowArray(value) {
+  return Array.isArray(value) ? value : []
+}
+
 /** Build safe project-intelligence payload for QS workflow modals. */
 export function prepareWorkflowData(intelligenceData, extract, { presentationStyle, pricingConfig } = {}) {
   const base = intelligenceData || {}
-  const merged = extract?.boqRows?.length || extract?.hasBOQ || extract?.hasEstimate
-    ? mergeExtractIntoProjectData(base, extract)
-    : {
-      ...base,
-      boqItems: Array.isArray(base.boqItems) ? base.boqItems : [],
-    }
+  const baseItems = asRowArray(base.boqItems)
+  const extractRows = ensureBoqRows(extract)
+  const shouldMerge = extractRows.length || extract?.hasBOQ || extract?.hasEstimate
+    || extract?.assumptions?.length || extract?.exclusions?.length
+
+  const merged = shouldMerge
+    ? mergeExtractIntoProjectData(base, {
+      ...extract,
+      boqRows: extractRows.length ? extractRows : asRowArray(extract.boqRows),
+    }, { replaceBoq: extractRows.length > 0 && Boolean(extract?.hasBOQ) })
+    : { ...base, boqItems: baseItems }
 
   const workflow = {
     ...(base.workflow || {}),
@@ -63,11 +83,24 @@ export function prepareWorkflowData(intelligenceData, extract, { presentationSty
 
   return {
     ...merged,
-    boqItems: Array.isArray(merged.boqItems) ? merged.boqItems : [],
+    boqItems: asRowArray(merged.boqItems),
+    assumptions: Array.isArray(merged.assumptions) ? merged.assumptions : [],
+    exclusions: Array.isArray(merged.exclusions) ? merged.exclusions : [],
+    provisional: Array.isArray(merged.provisional) ? merged.provisional : [],
     workflow,
     presentationStyle: presentationStyle || workflow.presentationStyle || base.presentationStyle || null,
     pricingConfig: pricingConfig || base.pricingConfig || merged.pricingConfig || null,
+    contractSum: extract?.contractSum || merged.pricing?.layers?.finalEstimate || null,
   }
+}
+
+/** Synchronous merge used before navigation or modal open. */
+export function buildMergedFromExtract(intelligenceData, extract, { replaceBoq = false } = {}) {
+  const rows = ensureBoqRows(extract)
+  const payload = rows.length ? { ...extract, boqRows: rows } : extract
+  return mergeExtractIntoProjectData(intelligenceData || {}, payload, {
+    replaceBoq: replaceBoq && rows.length > 0,
+  })
 }
 
 export function presentationStyleLabel(style) {

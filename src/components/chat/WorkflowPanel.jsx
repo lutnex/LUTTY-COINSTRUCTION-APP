@@ -27,27 +27,53 @@ export default function WorkflowPanel({
   const styleLabel = presentationStyleLabel(selectedStyle)
   const pricingLabel = workflowState.pricingSourceLabel || workflowState.pricingConfig?.profileName
 
-  const run = async (actionId, opts = {}) => {
+  const finish = (actionId, result) => {
+    logWorkflowAction(actionId, { result: result ?? 'ok' })
+    if (result?.toast) toast[result.toast.kind]?.(result.toast.title, result.toast.body)
+    if (result?.navigate) setTab?.(result.navigate)
+  }
+
+  const run = (actionId, opts = {}) => {
     if (busyAction) return
-    logWorkflowAction(actionId, { hasExtract: Boolean(extract), opts })
+    logWorkflowAction(actionId, { phase: 'click', hasExtract: Boolean(extract), opts })
     setBusyAction(actionId)
+    let asyncAction = false
     try {
-      const result = await onAction?.(actionId, extract, opts)
-      logWorkflowAction(actionId, { result: result ?? 'ok' })
-      if (result?.toast) toast[result.toast.kind]?.(result.toast.title, result.toast.body)
-      if (result?.navigate) setTab?.(result.navigate)
+      const result = onAction?.(actionId, extract, opts)
+      if (result && typeof result.then === 'function') {
+        asyncAction = true
+        result
+          .then(r => finish(actionId, r))
+          .catch(err => {
+            console.error(`[WorkflowAction] ${actionId} failed:`, err)
+            toast.error('Action failed', err?.message || 'Something went wrong — chat state preserved')
+          })
+          .finally(() => setBusyAction(null))
+        return
+      }
+      finish(actionId, result)
     } catch (err) {
       console.error(`[WorkflowAction] ${actionId} failed:`, err)
       toast.error('Action failed', err?.message || 'Something went wrong — chat state preserved')
     } finally {
-      setBusyAction(null)
+      if (!asyncAction) setBusyAction(null)
     }
   }
 
-  const handlePDF = async () => {
+  const handlePDF = () => {
+    if (pdfBusy || busyAction) return
     setPdfBusy(true)
-    await run(WORKFLOW_ACTIONS.EXPORT_PDF)
-    setPdfBusy(false)
+    const result = onAction?.(WORKFLOW_ACTIONS.EXPORT_PDF, extract)
+    const done = () => setPdfBusy(false)
+    if (result && typeof result.then === 'function') {
+      result.then(r => finish(WORKFLOW_ACTIONS.EXPORT_PDF, r)).catch(err => {
+        console.error('[WorkflowAction] export-pdf failed:', err)
+        toast.error('PDF export failed', err?.message || 'Try again or use Document Generator')
+      }).finally(done)
+    } else {
+      finish(WORKFLOW_ACTIONS.EXPORT_PDF, result)
+      done()
+    }
   }
 
   const confColor = { high: C.green, medium: C.amber, low: C.red }[extract.confidence] || C.textDim
@@ -139,7 +165,7 @@ export default function WorkflowPanel({
           />
         )}
         <ActionBtn label="💾 Save Project" color="purple" busy={busyAction === WORKFLOW_ACTIONS.SAVE_PROJECT} onClick={() => run(WORKFLOW_ACTIONS.SAVE_PROJECT)} />
-        <ActionBtn label={pdfBusy ? 'Exporting…' : '⬇ Export PDF'} color="outline" disabled={pdfBusy} onClick={() => void handlePDF()} />
+        <ActionBtn label={pdfBusy ? 'Exporting…' : '⬇ Export PDF'} color="outline" disabled={pdfBusy || Boolean(busyAction)} onClick={handlePDF} />
       </div>
     </div>
   )
