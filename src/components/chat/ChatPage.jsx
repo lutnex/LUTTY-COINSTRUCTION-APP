@@ -4,10 +4,23 @@ import { renderMd } from '../../utils/formatters.js'
 import WorkflowPanel from './WorkflowPanel.jsx'
 import { useToast } from '../../context/ToastContext.jsx'
 
+function getLastExtract(msgs) {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i]?.extract) return msgs[i].extract
+  }
+  return null
+}
+
 export default function ChatPage({
-  chat, prices, onImportBOQ, onImportVariation, onSendToDocGen, onOpenQSWorkflow, onOpenSaveProject,
-  onExtractPrices, onSavePricesToProfile, onChoosePricingSource,
-  onPDFExport, onStartNewProject, projState, dispatch, setTab,
+  chat,
+  prices,
+  workflowState,
+  onWorkflowAction,
+  onExtractPrices,
+  onSavePricesToProfile,
+  onChoosePricingSource,
+  onStartNewProject,
+  setTab,
 }) {
   const toast = useToast()
   const { msgs, inp, setInp, busy, progressLabel, attempt, attach, imgPrev, fileLoading, endRef, taRef, fileRef, send, stop, clear, handleFile, setAttach, setImgPrev } = chat
@@ -24,11 +37,19 @@ export default function ChatPage({
   const onSend = (text, retryCtx) => send(text, retryCtx, (kind, title, body, action) => toast[kind]?.(title, body, action))
   const onFile = (file) => handleFile(file, (kind, title, body) => toast[kind]?.(title, body))
 
-  const hasChatPrices = msgs.some(m => m.extract?.hasAgreedPrices || m.extract?.agreedPrices?.length)
+  const handleHeaderAction = async (fn) => {
+    if (busy) return
+    const extract = getLastExtract(msgs)
+    try {
+      await fn?.(extract)
+    } catch (e) {
+      console.error('[ChatPage] header action failed:', e)
+      toast.error('Action failed', e?.message || 'Could not complete action')
+    }
+  }
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Header */}
       <div style={{ padding: '12px 22px', borderBottom: `1px solid ${C.border}`, background: C.carbon, display: 'flex', alignItems: 'center', gap: 12 }}>
         <div>
           <div style={{ fontFamily: "'Bebas Neue'", fontSize: 19, letterSpacing: '1.5px', color: C.amber }}>Lutty Construction Estimator</div>
@@ -37,16 +58,15 @@ export default function ChatPage({
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {msgs.length > 0 && (
             <>
-              <button onClick={() => onExtractPrices?.()} disabled={busy} style={btn('outline')}>Extract Prices from Chat</button>
-              <button onClick={() => onSavePricesToProfile?.()} disabled={busy} style={btn('outline')}>Save Prices to Profile</button>
-              <button onClick={() => onChoosePricingSource?.()} disabled={busy} style={btn('outline')}>Choose Pricing Source</button>
+              <button onClick={() => handleHeaderAction(onExtractPrices)} disabled={busy} style={btn('outline')}>Extract Prices from Chat</button>
+              <button onClick={() => handleHeaderAction(onSavePricesToProfile)} disabled={busy} style={btn('outline')}>Save Prices to Profile</button>
+              <button onClick={() => handleHeaderAction(onChoosePricingSource)} disabled={busy} style={btn('outline')}>Choose Pricing Source</button>
               <button onClick={onStartNewProject} style={btn('outline')}>Clear Chat / Start New Project</button>
             </>
           )}
         </div>
       </div>
 
-      {/* Messages */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         {msgs.length === 0 && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: 18, padding: 32 }}>
@@ -111,17 +131,12 @@ export default function ChatPage({
               {m.role === 'assistant' && !m.streaming && !m.failed && m.extract && (
                 <WorkflowPanel
                   extract={m.extract}
-                  onImportBOQ={onImportBOQ}
-                  onImportVariation={onImportVariation}
-                  onSendToDocGen={onSendToDocGen}
-                  onOpenQSWorkflow={onOpenQSWorkflow}
-                  onOpenSaveProject={onOpenSaveProject}
-                  onExtractPrices={onExtractPrices}
-                  onSavePricesToProfile={onSavePricesToProfile}
-                  onChoosePricingSource={onChoosePricingSource}
-                  onPDFExport={onPDFExport}
-                  projState={projState}
-                  dispatch={dispatch}
+                  workflowState={workflowState}
+                  onAction={async (actionId, extract, opts) => {
+                    const result = await onWorkflowAction?.(actionId, extract, opts)
+                    if (result?.navigate) setTab?.(result.navigate)
+                    return result
+                  }}
                   setTab={setTab}
                 />
               )}
@@ -150,7 +165,6 @@ export default function ChatPage({
         <div ref={endRef} />
       </div>
 
-      {/* Input bar - same as before */}
       <div style={{ padding: '11px 22px', borderTop: `1px solid ${C.border}`, background: C.carbon, display: 'flex', flexDirection: 'column', gap: 7 }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[

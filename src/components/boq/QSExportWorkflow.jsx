@@ -26,6 +26,7 @@ export default function QSExportWorkflow({
   initialStyle = null,
   profileName = 'Default Profile',
   livePrices = [],
+  autoOpenCompare = false,
 }) {
   const [step, setStep] = useState(initialStep)
   const [presentationStyle, setPresentationStyle] = useState(initialStyle)
@@ -43,11 +44,19 @@ export default function QSExportWorkflow({
     setPricingMode(data?.pricingConfig?.sourceMode || null)
     setPriceInputs([])
     setResolvedRows(null)
+    setCompareOpen(false)
     setAssumptions(data?.assumptions || [])
     setExclusions(data?.exclusions || [])
   }, [open, data, initialStep, initialStyle])
 
-  const rows = resolvedRows || data?.boqItems || data?.boqRows || []
+  useEffect(() => {
+    if (!open || !autoOpenCompare) return
+    setStep(1)
+    setPricingMode(PRICING_SOURCE_MODES.COMPARE)
+  }, [open, autoOpenCompare])
+
+  const rawRows = resolvedRows || data?.boqItems || data?.boqRows || []
+  const rows = Array.isArray(rawRows) ? rawRows : []
   const packet = useMemo(() => buildClarificationPacket({ ...data, assumptions, exclusions, boqItems: rows }), [data, assumptions, exclusions, rows])
 
   const initialPrices = useMemo(() => {
@@ -60,6 +69,11 @@ export default function QSExportWorkflow({
   }, [rows, savedPrices, priceInputs, pricingMode, livePrices, profileName])
 
   const priceConflicts = useMemo(() => buildPriceConflicts(rows, { savedPrices, livePrices }), [rows, savedPrices, livePrices])
+
+  useEffect(() => {
+    if (!open || !autoOpenCompare || pricingMode !== PRICING_SOURCE_MODES.COMPARE) return
+    if (priceConflicts.length) setCompareOpen(true)
+  }, [open, autoOpenCompare, pricingMode, priceConflicts.length])
 
   const review = useMemo(() => validatePreExport({
     ...data,
@@ -255,7 +269,10 @@ export default function QSExportWorkflow({
 
         {step === 4 && (
           <div>
+            <ReviewRow label="BOQ lines" value={rows.length} />
             <ReviewRow label="Missing prices" value={review.missingPrices.length} warn={review.missingPrices.length > 0} />
+            <ReviewRow label="Assumptions" value={assumptions.length} warn={assumptions.length > 5} />
+            {assumptions.length > 0 && <BulletList items={assumptions.slice(0, 6)} />}
             <ReviewRow label="Provisional items" value={review.provisionalItems.length} />
             <ReviewRow label="Optional items" value={review.optionalItems.length} />
             <ReviewRow label="High-risk assumptions" value={review.highRiskAssumptions.length} warn={review.highRiskAssumptions.length > 0} />
@@ -275,9 +292,12 @@ export default function QSExportWorkflow({
               setStep(step + 1)
             }} disabled={step === 1 && !pricingMode} style={{ ...primaryBtn(), opacity: step === 1 && !pricingMode ? 0.5 : 1 }}>Continue →</button>
           ) : (
-            <button onClick={handleExport} disabled={!review.ok} style={{ ...primaryBtn(), opacity: review.ok ? 1 : 0.5, cursor: review.ok ? 'pointer' : 'not-allowed' }}>
-              Approve and Export to Document Generator
-            </button>
+            <>
+              <button type="button" onClick={onClose} style={ghostBtn()}>Approve Review</button>
+              <button onClick={handleExport} disabled={!review.ok} style={{ ...primaryBtn(), opacity: review.ok ? 1 : 0.5, cursor: review.ok ? 'pointer' : 'not-allowed' }}>
+                Approve and Export to Document Generator
+              </button>
+            </>
           )}
         </div>
       </div>

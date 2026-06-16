@@ -27,7 +27,26 @@ import { useDocGen } from './hooks/useDocGen.js'
 import { buildBOQReviewPrompt, normalizePromptInput } from './utils/promptBuilder.js'
 import { serializeBOQ, saveDocGenDraft } from './utils/boqWorkflow.js'
 import { mergeExtractIntoProjectData, projectDataToDocPayload, intelligenceToProjectPatch, emptyProjectData } from './utils/projectIntelligence.js'
-import { applyPresentationStyle } from './utils/qsWorkflow.js'
+import { applyPresentationStyle, PRESENTATION_STYLES } from './utils/qsWorkflow.js'
+import { PRICING_SOURCE_MODES, PRICING_SOURCE_OPTIONS } from './utils/priceProfileTypes.js'
+import {
+  WORKFLOW_ACTIONS,
+  logWorkflowAction,
+  hasBoqOrEstimateData,
+  hasVariationData,
+  prepareWorkflowData,
+  saveWorkflowSession,
+  loadWorkflowSession,
+  clearWorkflowSession,
+} from './utils/workflowActions.js'
+import { serializeChatMessages } from './utils/sessionStore.js'
+
+function getLastChatExtract(msgs) {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i]?.extract) return msgs[i].extract
+  }
+  return null
+}
 import {
   loadPriceProfileState,
   getActiveProfileItems,
@@ -117,6 +136,22 @@ function AppShellInner({ projState, dispatch }) {
   const [draftRecovered, setDraftRecovered] = useState(false)
   const [variationOrders, setVariationOrders] = useState([])
   const [voInitialAction, setVoInitialAction] = useState(null)
+  const [workflowState, setWorkflowState] = useState(() => loadWorkflowSession() || {})
+  const [qsAutoCompare, setQsAutoCompare] = useState(false)
+
+  useEffect(() => {
+    const session = loadWorkflowSession()
+    if (!session?.presentationStyle && !session?.pricingConfig) return
+    intelligence.setData(prev => ({
+      ...prev,
+      pricingConfig: session.pricingConfig || prev.pricingConfig,
+      workflow: {
+        ...(prev.workflow || {}),
+        presentationStyle: session.presentationStyle || prev.workflow?.presentationStyle,
+      },
+      presentationStyle: session.presentationStyle || prev.presentationStyle,
+    }))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshPendingMigrationCount = useCallback(async () => {
     const localDocs = loadSavedDocuments()
@@ -290,6 +325,14 @@ function AppShellInner({ projState, dispatch }) {
     saveAppSession({ tab })
   }, [tab])
 
+  useEffect(() => {
+    saveWorkflowSession({
+      presentationStyle: intelligence.data?.workflow?.presentationStyle || workflowState.presentationStyle,
+      pricingConfig: intelligence.data?.pricingConfig || workflowState.pricingConfig,
+      pricingSourceLabel: workflowState.pricingSourceLabel,
+    })
+  }, [intelligence.data?.workflow?.presentationStyle, intelligence.data?.pricingConfig, workflowState])
+
   const setEstimatePreferences = useCallback((next) => {
     setEstimatePreferencesRaw(prev => {
       const updated = typeof next === 'function' ? next(prev) : next
@@ -341,14 +384,39 @@ function AppShellInner({ projState, dispatch }) {
   const chat = useChat({ prices, onUsage: handleUsage, onExtract: handleAIExtract })
 
   const handleOpenQSWorkflow = useCallback((source, opts = {}) => {
-    const merged = source?.boqRows
-      ? mergeExtractIntoProjectData(intelligence.data, source)
-      : { ...intelligence.data, boqItems: source?.boqRows || source || intelligence.data.boqItems }
+    const merged = prepareWorkflowData(intelligence.data, source, {
+      presentationStyle: opts.initialStyle || intelligence.data?.workflow?.presentationStyle,
+      pricingConfig: intelligence.data?.pricingConfig,
+    })
+    if (!merged.boqItems?.length && !merged.assumptions?.length && !merged.exclusions?.length) {
+      logWorkflowAction('open-qs-workflow-blocked', { reason: 'no-data' })
+      toast.warn('Nothing to review', 'Generate a BOQ or estimate in chat first')
+      return false
+    }
     setQsInitialStep(opts.initialStep ?? 0)
-    setQsInitialStyle(opts.initialStyle ?? null)
+    setQsInitialStyle(opts.initialStyle ?? merged.presentationStyle ?? null)
+    setQsAutoCompare(Boolean(opts.autoCompare))
     setQsWorkflowData(merged)
     setQsWorkflowOpen(true)
+    logWorkflowAction('open-qs-workflow', { step: opts.initialStep ?? 0, style: opts.initialStyle, rows: merged.boqItems?.length })
+    return true
+  }, [intelligence, toast])
+
+  const setPresentationStyle = useCallback((style) => {
+    setWorkflowState(prev => ({ ...prev, presentationStyle: style }))
+    intelligence.setData({
+      ...intelligence.data,
+      workflow: { ...(intelligence.data.workflow || {}), presentationStyle: style },
+      presentationStyle: style,
+    })
+    logWorkflowAction('set-presentation-style', { style })
   }, [intelligence])
+
+  const extractPricesFromContext = useCallback((extract) => {
+    if (extract?.agreedPrices?.length) return extract.agreedPrices
+    if (extract?.hasAgreedPrices && extract.agreedPrices) return extract.agreedPrices
+    return extractAgreedPricesFromChat(chat.msgs)
+  }, [chat.msgs])
 
   const handleOpenSaveProject = useCallback((extract) => {
     setSaveProjectExtract(extract)
@@ -373,12 +441,22 @@ function AppShellInner({ projState, dispatch }) {
       description: fields.projectDescription,
     }
     merged.client = { ...merged.client, name: fields.clientName }
-    const priced = intelligence.recomputePricing(merged)
+    const priced = intelligence.recomputePricing({
+      ...merged,
+      pricingConfig: workflowState.pricingConfig || merged.pricingConfig,
+      workflow: {
+        ...(merged.workflow || {}),
+        presentationStyle: workflowState.presentationStyle || merged.workflow?.presentationStyle,
+      },
+    })
     intelligence.setData(priced)
 
     const patch = intelligenceToProjectPatch(priced)
+    const chatSnapshot = serializeChatMessages(chat.msgs)
     const todayStr = new Date().toISOString().slice(0, 10)
     const activeId = projState.activeId
+    const pricingConfig = priced.pricingConfig || workflowState.pricingConfig
+    const presentationStyle = priced.workflow?.presentationStyle || workflowState.presentationStyle
 
     if (activeId) {
       dispatch({
@@ -392,7 +470,10 @@ function AppShellInner({ projState, dispatch }) {
             projectLocation: fields.location,
             projectTitle: fields.projectTitle,
             projectDescription: fields.projectDescription,
+            pricingConfig,
+            presentationStyle,
           },
+          chatSnapshot,
           ...patch,
         },
       })
@@ -419,7 +500,10 @@ function AppShellInner({ projState, dispatch }) {
             projectLocation: fields.location,
             projectTitle: fields.projectTitle,
             projectDescription: fields.projectDescription,
+            pricingConfig,
+            presentationStyle,
           },
+          chatSnapshot,
           boqRows: patch.boqRows,
           materials: patch.materials,
           labor: patch.labor,
@@ -439,7 +523,7 @@ function AppShellInner({ projState, dispatch }) {
 
     setSaveProjectOpen(false)
     setSaveProjectExtract(null)
-  }, [dispatch, intelligence, projState.activeId, projState.projects, saveProjectExtract, toast])
+  }, [dispatch, intelligence, projState.activeId, projState.projects, saveProjectExtract, chat.msgs, toast, workflowState])
 
   const handleQSExport = useCallback(({ presentationStyle, priceInputs, rows, assumptions, exclusions, workflowMeta }) => {
     const tid = toast.loading('Exporting to Document Generator…')
@@ -536,6 +620,7 @@ function AppShellInner({ projState, dispatch }) {
   }, [])
 
   const handleSelectPricingSource = useCallback((mode) => {
+    const label = PRICING_SOURCE_OPTIONS.find(o => o.id === mode)?.label || mode
     intelligence.setData({
       ...intelligence.data,
       pricingConfig: {
@@ -545,20 +630,28 @@ function AppShellInner({ projState, dispatch }) {
         chosenAt: new Date().toISOString(),
       },
     })
+    setWorkflowState(prev => ({
+      ...prev,
+      pricingConfig: { sourceMode: mode, profileName: activeProfile.name },
+      pricingSourceLabel: label,
+    }))
     setPricingSourceOpen(false)
-    toast.success('Pricing source set', `Mode: ${mode}`)
-    handleOpenQSWorkflow(intelligence.data, { initialStep: 1 })
-  }, [activeProfile, intelligence, handleOpenQSWorkflow, toast])
+    toast.success('Pricing source set', label)
+    logWorkflowAction(WORKFLOW_ACTIONS.CHOOSE_PRICING_SOURCE, { mode, label })
+  }, [activeProfile, intelligence, toast])
 
   const handleStartNewProject = useCallback(() => {
     chat.clear()
     clearAppSession()
+    clearWorkflowSession()
+    setWorkflowState({})
     intelligence.setData(emptyProjectData())
     docGen.resetDocument({ newQuoteNum: true })
     setQsWorkflowOpen(false)
     setQsWorkflowData(null)
     setSaveProjectOpen(false)
     setSaveProjectExtract(null)
+    setExtractedPrices([])
     setTab('chat')
     toast.info('New project started', 'Chat and workflow cleared — use this when you want a fresh start')
   }, [chat, docGen, intelligence, toast])
@@ -596,32 +689,12 @@ function AppShellInner({ projState, dispatch }) {
     const result = await saveVariationOrderUnified(vo)
     if (result.ok) {
       await refreshVariationOrders()
-      setTab('variation')
       toast.success(`${items.length} items imported to ${result.order?.variationNumber}`)
+      return { navigate: 'variation' }
     }
+    toast.error('Import failed', result.error || 'Could not save variation order')
+    return { ok: false }
   }, [intelligence, variationOrders, refreshVariationOrders, toast])
-
-  // ── BOQ import from AI ───────────────────────────────────────────────────
-  const handleImportBOQ = useCallback((rows) => {
-    intelligence.mergeFromExtract({ boqRows: rows })
-    toast.success(`${rows.length} rows imported to BOQ Builder`, undefined, {
-      label: 'View BOQ', fn: () => setTab('boq'),
-    })
-  }, [intelligence, toast])
-
-  const handleSendToDocGen = useCallback((extract) => {
-    handleOpenQSWorkflow(extract)
-  }, [handleOpenQSWorkflow])
-
-  // ── BOQ Builder → QS workflow → Document Generator ───────────────────────
-  const handleBOQToDocGen = useCallback(async (rows) => {
-    if (!rows?.length) {
-      toast.warn('No BOQ items', 'Add at least one line item before export')
-      return
-    }
-    intelligence.setBoqItems(rows)
-    handleOpenQSWorkflow({ boqRows: rows, ...intelligence.data, boqItems: rows })
-  }, [handleOpenQSWorkflow, intelligence, toast])
 
   // ── PDF export from AI extract ────────────────────────────────────────────
   const handlePDFExport = useCallback(async (extract) => {
@@ -629,8 +702,9 @@ function AppShellInner({ projState, dispatch }) {
     setPdfStatus('Preparing…')
     intelligence.mergeFromExtract(extract)
     const payload = intelligence.getDocGenPayload({ docType: 'estimate', source: 'ai-export' })
+    const style = workflowState.presentationStyle || intelligence.data?.workflow?.presentationStyle
     const data = {
-      type: 'estimate',
+      type: style === PRESENTATION_STYLES.PREMIUM ? 'quotation' : 'estimate',
       meta: payload?.meta || {
         quoteNum: 'DLC-AI-EXPORT',
         date: new Date().toISOString().slice(0, 10),
@@ -652,6 +726,7 @@ function AppShellInner({ projState, dispatch }) {
       drawingAnalysis: payload?.drawingAnalysis || { takeoffNotes: extract.takeoffNotes || '' },
       pricing: payload?.pricing,
       contractSum: payload?.contractSum || extract.contractSum || 0,
+      presentationStyle: style,
     }
     try {
       await downloadPDF(
@@ -661,11 +736,176 @@ function AppShellInner({ projState, dispatch }) {
         companyLogo.getExportLogo(),
       )
       toast.done(tid, 'PDF downloaded')
-    } catch {
-      toast.fail(tid, 'PDF failed', 'Try the DocGen tab instead')
+      logWorkflowAction(WORKFLOW_ACTIONS.EXPORT_PDF, { ok: true, rows: data.boqRows?.length })
+    } catch (e) {
+      logWorkflowAction(WORKFLOW_ACTIONS.EXPORT_PDF, { ok: false, error: e?.message })
+      toast.fail(tid, 'PDF failed', e?.message || 'Try the DocGen tab instead')
     }
     setPdfStatus(null)
-  }, [toast, companyLogo, intelligence])
+  }, [toast, companyLogo, intelligence, workflowState.presentationStyle])
+
+  const handleWorkflowAction = useCallback(async (actionId, extract, opts = {}) => {
+    logWorkflowAction(actionId, {
+      hasBoq: hasBoqOrEstimateData(extract),
+      hasVariation: hasVariationData(extract),
+      boqRows: extract?.boqRows?.length || 0,
+    })
+
+    switch (actionId) {
+      case WORKFLOW_ACTIONS.IMPORT_BOQ: {
+        if (!hasBoqOrEstimateData(extract) && !extract?.boqRows?.length) {
+          toast.warn('No BOQ data', 'Ask the AI to generate a BOQ or estimate first')
+          return { ok: false }
+        }
+        intelligence.mergeFromExtract(extract, { replaceBoq: true })
+        toast.success('Imported to BOQ Builder', `${extract.boqRows?.length || 0} lines with assumptions and notes`)
+        return { navigate: 'boq' }
+      }
+
+      case WORKFLOW_ACTIONS.REVIEW: {
+        if (!hasBoqOrEstimateData(extract)) {
+          toast.warn('Nothing to review', 'Generate BOQ or estimate data in chat first')
+          return { ok: false }
+        }
+        intelligence.mergeFromExtract(extract)
+        handleOpenQSWorkflow(extract, { initialStep: 4 })
+        return { ok: true }
+      }
+
+      case WORKFLOW_ACTIONS.EXTRACT_PRICES: {
+        const extracted = extractPricesFromContext(extract)
+        if (!extracted.length) {
+          toast.warn('No prices found', 'Agree rates in chat first (e.g. Cement 42.5R = 110 GHS/bag)')
+          return { ok: false }
+        }
+        setExtractedPrices(extracted)
+        setSavePricesOpen(true)
+        toast.success(`${extracted.length} price(s) extracted`, 'Review and confirm before saving')
+        return { ok: true }
+      }
+
+      case WORKFLOW_ACTIONS.SAVE_PRICES_PROFILE: {
+        const extracted = extractedPrices.length ? extractedPrices : extractPricesFromContext(extract)
+        if (!extracted.length) {
+          toast.warn('No prices to save', 'Use Extract Prices from Chat first')
+          return { ok: false }
+        }
+        setExtractedPrices(extracted)
+        setSavePricesOpen(true)
+        return { ok: true }
+      }
+
+      case WORKFLOW_ACTIONS.CHOOSE_PRICING_SOURCE: {
+        setPricingSourceOpen(true)
+        return { ok: true }
+      }
+
+      case WORKFLOW_ACTIONS.COMPARE_PROFILE_MARKET: {
+        if (!hasBoqOrEstimateData(extract)) {
+          toast.warn('No BOQ to price', 'Generate a BOQ in chat before comparing prices')
+          return { ok: false }
+        }
+        if (!livePrices?.length) {
+          toast.warn('Live market prices unavailable', 'Use profile or manual prices instead')
+        }
+        intelligence.mergeFromExtract(extract)
+        handleOpenQSWorkflow(extract, { initialStep: 1, autoCompare: true })
+        return { ok: true }
+      }
+
+      case WORKFLOW_ACTIONS.PREMIUM_QUOTATION: {
+        if (!hasBoqOrEstimateData(extract)) {
+          toast.warn('No BOQ data', 'Generate a BOQ or estimate before choosing presentation style')
+          return { ok: false }
+        }
+        setPresentationStyle(PRESENTATION_STYLES.PREMIUM)
+        intelligence.mergeFromExtract(extract)
+        handleOpenQSWorkflow(extract, { initialStep: 3, initialStyle: PRESENTATION_STYLES.PREMIUM })
+        toast.success('Style selected', 'Premium Quotation — summarized client-facing totals')
+        return { ok: true }
+      }
+
+      case WORKFLOW_ACTIONS.DETAILED_BOQ: {
+        if (!hasBoqOrEstimateData(extract)) {
+          toast.warn('No BOQ data', 'Generate a BOQ or estimate before choosing presentation style')
+          return { ok: false }
+        }
+        setPresentationStyle(PRESENTATION_STYLES.DETAILED)
+        intelligence.mergeFromExtract(extract)
+        handleOpenQSWorkflow(extract, { initialStep: 3, initialStyle: PRESENTATION_STYLES.DETAILED })
+        toast.success('Style selected', 'Detailed BOQ — full item-by-item breakdown')
+        return { ok: true }
+      }
+
+      case WORKFLOW_ACTIONS.EXPORT_DOCGEN: {
+        if (!hasBoqOrEstimateData(extract)) {
+          toast.warn('No export data', 'Generate a BOQ or estimate in chat first')
+          return { ok: false }
+        }
+        const style = workflowState.presentationStyle || intelligence.data?.workflow?.presentationStyle
+        if (!style) {
+          toast.warn('Select document style first', 'Choose Premium Quotation or Detailed BOQ before export')
+          return { ok: false }
+        }
+        intelligence.mergeFromExtract(extract)
+        handleOpenQSWorkflow(extract, { initialStep: 4, initialStyle: style })
+        return { ok: true }
+      }
+
+      case WORKFLOW_ACTIONS.SAVE_PROJECT: {
+        intelligence.mergeFromExtract(extract)
+        setSaveProjectExtract(extract)
+        setSaveProjectOpen(true)
+        return { ok: true }
+      }
+
+      case WORKFLOW_ACTIONS.EXPORT_PDF: {
+        if (!hasBoqOrEstimateData(extract) && !extract?.contractSum) {
+          toast.warn('Nothing to export', 'Generate an estimate or BOQ in chat first')
+          return { ok: false }
+        }
+        await handlePDFExport(extract)
+        return { ok: true }
+      }
+
+      case WORKFLOW_ACTIONS.IMPORT_VARIATION: {
+        if (!extract?.variationItems?.length) {
+          toast.warn('No variation items', 'Ask the AI to build a variation schedule first')
+          return { ok: false }
+        }
+        return await handleImportVariation(extract.variationItems)
+      }
+
+      default:
+        toast.warn('Not configured', 'This feature is not fully configured yet.')
+        return { ok: false }
+    }
+  }, [
+    extractPricesFromContext, extractedPrices.length, handleImportVariation, handleOpenQSWorkflow,
+    handlePDFExport, intelligence, livePrices, setPresentationStyle, toast, workflowState.presentationStyle,
+  ])
+
+  // ── BOQ import from AI (legacy callback) ───────────────────────────────────
+  const handleImportBOQ = useCallback((rows) => {
+    intelligence.mergeFromExtract({ boqRows: rows }, { replaceBoq: true })
+    toast.success(`${rows.length} rows imported to BOQ Builder`, undefined, {
+      label: 'View BOQ', fn: () => setTab('boq'),
+    })
+  }, [intelligence, toast])
+
+  const handleSendToDocGen = useCallback((extract) => {
+    handleOpenQSWorkflow(extract)
+  }, [handleOpenQSWorkflow])
+
+  // ── BOQ Builder → QS workflow → Document Generator ───────────────────────
+  const handleBOQToDocGen = useCallback(async (rows) => {
+    if (!rows?.length) {
+      toast.warn('No BOQ items', 'Add at least one line item before export')
+      return
+    }
+    intelligence.setBoqItems(rows)
+    handleOpenQSWorkflow({ boqRows: rows, ...intelligence.data, boqItems: rows })
+  }, [handleOpenQSWorkflow, intelligence, toast])
 
   // ── DocGen PDF actions ────────────────────────────────────────────────────
   const handleDocDownload = useCallback(async () => {
@@ -868,18 +1108,12 @@ function AppShellInner({ projState, dispatch }) {
           <ChatPage
             chat={chat}
             prices={prices}
-            onImportBOQ={handleImportBOQ}
-            onImportVariation={handleImportVariation}
-            onSendToDocGen={handleSendToDocGen}
-            onOpenQSWorkflow={handleOpenQSWorkflow}
-            onOpenSaveProject={handleOpenSaveProject}
-            onExtractPrices={handleExtractPrices}
-            onSavePricesToProfile={handleSavePricesToProfile}
-            onChoosePricingSource={handleOpenPricingSource}
-            onPDFExport={handlePDFExport}
+            workflowState={workflowState}
+            onWorkflowAction={handleWorkflowAction}
+            onExtractPrices={() => handleWorkflowAction(WORKFLOW_ACTIONS.EXTRACT_PRICES, getLastChatExtract(chat.msgs))}
+            onSavePricesToProfile={() => handleWorkflowAction(WORKFLOW_ACTIONS.SAVE_PRICES_PROFILE, getLastChatExtract(chat.msgs))}
+            onChoosePricingSource={() => handleWorkflowAction(WORKFLOW_ACTIONS.CHOOSE_PRICING_SOURCE, getLastChatExtract(chat.msgs))}
             onStartNewProject={handleStartNewProject}
-            projState={projState}
-            dispatch={dispatch}
             setTab={setTab}
           />
         )}
@@ -1032,7 +1266,7 @@ function AppShellInner({ projState, dispatch }) {
 
       <QSExportWorkflow
         open={qsWorkflowOpen}
-        onClose={() => setQsWorkflowOpen(false)}
+        onClose={() => { setQsWorkflowOpen(false); setQsAutoCompare(false) }}
         data={qsWorkflowData}
         savedPrices={prices}
         profileName={activeProfile?.name}
@@ -1041,6 +1275,7 @@ function AppShellInner({ projState, dispatch }) {
         onExport={handleQSExport}
         initialStep={qsInitialStep}
         initialStyle={qsInitialStyle}
+        autoOpenCompare={qsAutoCompare}
       />
 
       <SavePricesToProfileDialog

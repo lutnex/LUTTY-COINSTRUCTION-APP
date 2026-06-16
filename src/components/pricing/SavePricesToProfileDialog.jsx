@@ -104,7 +104,7 @@ export default function SavePricesToProfileDialog({
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr>
-                {['Item', 'Spec', 'Unit', 'Price', 'Category', 'Supplier', 'Notes', ''].map(h => (
+                {['Item', 'Spec', 'Unit', 'Price', 'Category', 'Source', 'Notes', ''].map(h => (
                   <th key={h} style={th}>{h}</th>
                 ))}
               </tr>
@@ -121,7 +121,11 @@ export default function SavePricesToProfileDialog({
                       {Object.entries(CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                     </select>
                   </td>
-                  <td style={td}><input value={it.supplier || ''} onChange={e => updateItem(it.id, 'supplier', e.target.value)} style={cellInp} /></td>
+                  <td style={td}>
+                    <select value={it.source || 'user_agreed'} onChange={e => updateItem(it.id, 'source', e.target.value)} style={cellInp}>
+                      {Object.entries(SOURCE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                    </select>
+                  </td>
                   <td style={td}><input value={it.notes || ''} onChange={e => updateItem(it.id, 'notes', e.target.value)} style={cellInp} /></td>
                   <td style={td}><button type="button" onClick={() => removeItem(it.id)} style={btn('red')}>✕</button></td>
                 </tr>
