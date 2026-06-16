@@ -729,48 +729,53 @@ function AppShellInner({ projState, dispatch }) {
   const handlePDFExport = useCallback(async (extract) => {
     const tid = toast.loading('Generating PDF…')
     setPdfStatus('Preparing…')
-    applyExtractNow(extract)
-    const payload = intelligence.getDocGenPayload({ docType: 'estimate', source: 'ai-export' })
-    const style = workflowState.presentationStyle || intelligence.data?.workflow?.presentationStyle
-    const data = {
-      type: style === PRESENTATION_STYLES.PREMIUM ? 'quotation' : 'estimate',
-      meta: payload?.meta || {
-        quoteNum: 'DLC-AI-EXPORT',
-        date: new Date().toISOString().slice(0, 10),
-        validDays: '30',
-        clientName: '',
-        clientContact: '',
-        clientEmail: '',
-        projectLocation: '',
-        projectTitle: extract.projectTitle || 'Construction Estimate',
-        projectDescription: extract.projectScope || '',
-      },
-      boqRows: payload?.boqRows || extract.boqRows || [],
-      materials: payload?.materials || extract.materials || [],
-      matCategories: payload?.matCategories || extract.matCategories || [],
-      labor: payload?.labor || extract.labor || [],
-      prelims: payload?.prelims || [],
-      assumptions: payload?.assumptions || extract.assumptions || [],
-      exclusions: payload?.exclusions || extract.exclusions || [],
-      drawingAnalysis: payload?.drawingAnalysis || { takeoffNotes: extract.takeoffNotes || '' },
-      pricing: payload?.pricing,
-      contractSum: payload?.contractSum || extract.contractSum || 0,
-      presentationStyle: style,
-    }
     try {
-      await downloadPDF(
+      applyExtractNow(extract)
+      const payload = intelligence.getDocGenPayload({ docType: 'estimate', source: 'ai-export' })
+      const style = workflowState.presentationStyle || intelligence.data?.workflow?.presentationStyle
+      const data = {
+        type: style === PRESENTATION_STYLES.PREMIUM ? 'quotation' : 'estimate',
+        meta: payload?.meta || {
+          quoteNum: 'DLC-AI-EXPORT',
+          date: new Date().toISOString().slice(0, 10),
+          validDays: '30',
+          clientName: '',
+          clientContact: '',
+          clientEmail: '',
+          projectLocation: '',
+          projectTitle: extract.projectTitle || 'Construction Estimate',
+          projectDescription: extract.projectScope || '',
+        },
+        boqRows: payload?.boqRows || extract.boqRows || [],
+        materials: payload?.materials || extract.materials || [],
+        matCategories: payload?.matCategories || extract.matCategories || [],
+        labor: payload?.labor || extract.labor || [],
+        prelims: payload?.prelims || [],
+        assumptions: payload?.assumptions || extract.assumptions || [],
+        exclusions: payload?.exclusions || extract.exclusions || [],
+        drawingAnalysis: payload?.drawingAnalysis || { takeoffNotes: extract.takeoffNotes || '' },
+        pricing: payload?.pricing,
+        contractSum: payload?.contractSum || extract.contractSum || 0,
+        presentationStyle: style,
+      }
+      const result = await downloadPDF(
         data,
         `${extract.projectTitle || 'estimate'}.pdf`,
         s => { setPdfStatus(s); toast.update(tid, { body: s }) },
         companyLogo.getExportLogo(),
       )
-      toast.done(tid, 'PDF downloaded')
-      logWorkflowAction(WORKFLOW_ACTIONS.EXPORT_PDF, { ok: true, rows: data.boqRows?.length })
+      if (result?.method === 'html') {
+        toast.done(tid, 'HTML document downloaded', result.message)
+      } else {
+        toast.done(tid, 'PDF downloaded')
+      }
+      logWorkflowAction(WORKFLOW_ACTIONS.EXPORT_PDF, { ok: true, rows: data.boqRows?.length, method: result?.method })
     } catch (e) {
       logWorkflowAction(WORKFLOW_ACTIONS.EXPORT_PDF, { ok: false, error: e?.message })
       toast.fail(tid, 'PDF failed', e?.message || 'Try the DocGen tab instead')
+    } finally {
+      setPdfStatus(null)
     }
-    setPdfStatus(null)
   }, [toast, companyLogo, intelligence, workflowState.presentationStyle, applyExtractNow])
 
   const handleConfirmExtractedPrices = useCallback((items) => {

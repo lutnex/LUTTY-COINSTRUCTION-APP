@@ -95,14 +95,15 @@ function resolveItemAmount(item, runningTotal, projectSubtotal) {
  * Apply enabled adjustments in order on a running total.
  * @returns {{ lines, finalTotal, enabledLines }}
  */
-export function applyFinancialAdjustments(projectSubtotal, adjustments = {}) {
+export function applyFinancialAdjustments(projectSubtotal, adjustments) {
+  const adj = adjustments && typeof adjustments === 'object' ? adjustments : {}
   const sub = parseFloat(projectSubtotal) || 0
   let running = sub
   const lines = []
   const enabledLines = []
 
   for (const id of FINANCIAL_ITEM_ORDER) {
-    const item = adjustments[id]
+    const item = adj[id]
     const meta = FINANCIAL_ITEM_META[id]
     if (!item?.enabled) continue
 
@@ -141,7 +142,7 @@ export function freezeAdjustmentAmount(item, runningTotal, projectSubtotal) {
 }
 
 export function applyPreferenceDefaults(adjustments, preferences) {
-  const next = { ...adjustments }
+  const next = { ...createDefaultFinancialAdjustments(), ...(adjustments && typeof adjustments === 'object' ? adjustments : {}) }
   const map = [
     ['contingency', preferences.autoContingency],
     ['overheads', preferences.autoOverheads],

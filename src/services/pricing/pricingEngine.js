@@ -18,6 +18,8 @@ import {
 
   FINANCIAL_ITEM_META,
 
+  createDefaultFinancialAdjustments,
+
 } from '../../utils/financialAdjustments.js'
 
 
@@ -68,9 +70,17 @@ export function computePricing(input = {}) {
 
     prelims = [],
 
-    financialAdjustments,
+    financialAdjustments: rawAdjustments,
 
   } = input
+
+
+
+  const financialAdjustments = rawAdjustments && typeof rawAdjustments === 'object'
+
+    ? rawAdjustments
+
+    : createDefaultFinancialAdjustments()
 
 
 

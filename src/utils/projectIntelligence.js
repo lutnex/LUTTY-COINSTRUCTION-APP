@@ -64,7 +64,7 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
     boqRows: dedupe,
     materials: extract.materials?.length ? extract.materials : base.materials,
     labor: extract.labor?.length ? extract.labor : base.labor,
-    financialAdjustments: base.financialAdjustments,
+    financialAdjustments: base.financialAdjustments ?? undefined,
   })
 
   const notesParts = []

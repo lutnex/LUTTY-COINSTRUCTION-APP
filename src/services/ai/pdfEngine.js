@@ -28,7 +28,8 @@ let jsPDFReady = false
 async function ensureJsPDF() {
   if (jsPDFReady || window.jspdf) { jsPDFReady = true; return true }
   exportLog('pdf-generation', 'Loading jsPDF + autoTable libraries…')
-  return new Promise(resolve => {
+
+  const loadScripts = new Promise(resolve => {
     const s = document.createElement('script')
     s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
     s.onload = () => {
@@ -41,6 +42,15 @@ async function ensureJsPDF() {
     s.onerror = () => { exportLog('pdf-generation', 'jsPDF failed to load'); resolve(false) }
     document.head.appendChild(s)
   })
+
+  const timedOut = new Promise(resolve => {
+    setTimeout(() => {
+      exportLog('pdf-generation', 'jsPDF load timed out — using HTML fallback')
+      resolve(false)
+    }, 12000)
+  })
+
+  return Promise.race([loadScripts, timedOut])
 }
 
 function esc(s) {
@@ -80,7 +90,7 @@ function computeTotals(data) {
     materials: data.materials,
     labor: data.labor,
     prelims: data.prelims,
-    financialAdjustments: data.financialAdjustments,
+    financialAdjustments: data.financialAdjustments ?? undefined,
   })
 
   return {
@@ -383,11 +393,12 @@ export function generateHTMLFallback(data, logoUrl) {
  * Renders the same document sections as buildDocumentHTML — no canvas capture.
  */
 export async function generatePDF(data, logoUrl) {
-  if (!await ensureJsPDF() || !window.jspdf) return null
+  try {
+    if (!await ensureJsPDF() || !window.jspdf) return null
 
-  const d = enrichExportData(data, logoUrl)
-  const { jsPDF } = window.jspdf
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+    const d = enrichExportData(data, logoUrl)
+    const { jsPDF } = window.jspdf
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
   const PW = 210
   const ML = 15
   const MR = 195
@@ -634,6 +645,11 @@ export async function generatePDF(data, logoUrl) {
   }
 
   return doc.output('arraybuffer')
+  } catch (e) {
+    exportLog('pdf-generation', { error: e?.message })
+    console.error(`${LOG_PREFIX} generatePDF failed:`, e)
+    return null
+  }
 }
 
 export async function printDocument(data, logoUrl) {
