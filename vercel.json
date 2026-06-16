@@ -7,6 +7,20 @@
       "maxDuration": 60
     }
   },
+  "headers": [
+    {
+      "source": "/index.html",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    }
+  ],
   "rewrites": [
     { "source": "/api/documents/:action", "destination": "/api/supabase-documents?action=:action" },
     { "source": "/api/materials/:action", "destination": "/api/material-prices?resource=materials&action=:action" },

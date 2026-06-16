@@ -154,6 +154,13 @@ function aiProxyPlugin(mode, envDir) {
 
 export default defineConfig(({ mode }) => ({
   plugins: [react(), aiProxyPlugin(mode, process.cwd())],
+  define: {
+    __APP_BUILD_ID__: JSON.stringify(
+      process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7)
+      || process.env.GITHUB_SHA?.slice(0, 7)
+      || 'local',
+    ),
+  },
   server: { port: 5173, open: true },
   preview: { port: 4173 },
 }))

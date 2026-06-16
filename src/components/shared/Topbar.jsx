@@ -40,7 +40,7 @@ export function Topbar({ busy, progressLabel, attempt, onStop, aiUsage, aiHealth
       <div style={{ fontFamily: 'Bebas Neue', fontSize: 21, letterSpacing: '2.5px', color: C.amber, flex: 1 }}>
         LUTTY CONSTRUCTIQ{' '}
         <em style={{ color: C.textDim, fontStyle: 'normal', fontFamily: 'IBM Plex Mono', fontSize: 11, letterSpacing: 0, marginLeft: 8 }}>
-          v6.0 — AI Construction OS
+          v6.0 — build {typeof __APP_BUILD_ID__ !== 'undefined' ? __APP_BUILD_ID__ : 'dev'}
         </em>
       </div>
 
