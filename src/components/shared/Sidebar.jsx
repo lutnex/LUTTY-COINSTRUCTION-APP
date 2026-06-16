@@ -7,6 +7,7 @@ const NAV = [
   { id: 'projects',    ico: '📁', label: 'My Projects'        },
   { id: 'documents',   ico: '📄', label: 'Saved Documents'    },
   { id: 'boq',         ico: '📋', label: 'BOQ Builder'        },
+  { id: 'variation',   ico: '📝', label: 'Variation Order'    },
   { id: 'docgen',      ico: '🖨️',  label: 'Document Generator'},
   { id: 'procurement', ico: '🛒', label: 'Procurement'        },
   { id: 'risks',       ico: '⚠️',  label: 'Risk Register'     },
@@ -20,11 +21,13 @@ const NAV = [
 const QUICK_ACTIONS = [
   { label: 'Full BOQ',     prompt: 'Follow QS WORKFLOW Phase 1 only: measured quantities, materials needing prices, assumptions, exclusions, provisional items. Do NOT apply unit rates until I provide them.' },
   { label: 'Full Estimate',prompt: 'Follow QS WORKFLOW. Phase 1 measurement & clarification only. Ask for each material price, specification, and supply type. No assumed market prices.' },
-  { label: 'Raise VO',     prompt: 'Draft a variation order. Ask me what changed, who instructed it, and guide me through pricing it correctly.' },
+  { label: 'Variation Order', action: 'variation:new', display: 'New Variation Order' },
+  { label: 'Variation Order', action: 'variation:review', display: 'Review Variation' },
+  { label: 'Variation Order', action: 'variation:export', display: 'Export Variation' },
   { label: 'Risk Analysis',prompt: 'Full commercial risk assessment — ask me about scope, contract type, and known risks.' },
 ]
 
-export function Sidebar({ activeTab, onTabChange, boqCount, savedDocCount = 0, onQuickAction, aiBusy }) {
+export function Sidebar({ activeTab, onTabChange, boqCount, savedDocCount = 0, voCount = 0, onQuickAction, onVariationAction, aiBusy }) {
   const { state } = useProjects()
 
   return (
@@ -76,6 +79,11 @@ export function Sidebar({ activeTab, onTabChange, boqCount, savedDocCount = 0, o
                 {savedDocCount}
               </span>
             )}
+            {n.id === 'variation' && voCount > 0 && (
+              <span style={{ marginLeft: 'auto', background: C.panel, border: `1px solid ${C.border}`, color: C.textDim, borderRadius: 10, fontSize: 10, padding: '1px 6px', fontFamily: 'IBM Plex Mono' }}>
+                {voCount}
+              </span>
+            )}
           </div>
         ))}
 
@@ -86,8 +94,15 @@ export function Sidebar({ activeTab, onTabChange, boqCount, savedDocCount = 0, o
 
         {QUICK_ACTIONS.map(a => (
           <div
-            key={a.label}
-            onClick={() => !aiBusy && onQuickAction(a.prompt)}
+            key={a.display || a.label}
+            onClick={() => {
+              if (aiBusy) return
+              if (a.action?.startsWith('variation:')) {
+                onVariationAction?.(a.action.split(':')[1])
+              } else if (a.prompt) {
+                onQuickAction(a.prompt)
+              }
+            }}
             style={{
               display: 'flex', alignItems: 'center', gap: 8,
               padding: '6px 14px',
@@ -100,7 +115,7 @@ export function Sidebar({ activeTab, onTabChange, boqCount, savedDocCount = 0, o
             onMouseLeave={e => { if (!aiBusy) e.currentTarget.style.color = C.textDim }}
           >
             <span style={{ fontSize: 11, color: C.amberLo }}>▶</span>
-            New {a.label}
+            {a.display || `New ${a.label}`}
           </div>
         ))}
       </div>

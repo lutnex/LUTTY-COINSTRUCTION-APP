@@ -48,6 +48,7 @@ import { DEFAULT_PRICES, DEFAULT_RISKS, DEFAULT_PROC, C } from './utils/constant
 import { loadEstimatePreferences, persistEstimatePreferences } from './utils/financialAdjustments.js'
 import EstimatePreferencesPage from './components/tools/EstimatePreferencesPage.jsx'
 import SavedDocumentsPage from './components/documents/SavedDocumentsPage.jsx'
+import VariationOrderPage from './components/variation/VariationOrderPage.jsx'
 import {
   loadAllSavedDocuments,
   saveDocumentUnified,
@@ -65,6 +66,12 @@ import {
 import { fetchCloudDocuments } from './services/supabase/savedDocumentsCloud.js'
 import { loadSavedDocuments } from './utils/savedDocuments.js'
 import { useCloudSave } from './hooks/useCloudSave.js'
+import {
+  loadAllVariationOrders,
+  saveVariationOrderUnified,
+  deleteVariationOrderUnified,
+  createNewVariationOrder,
+} from './services/variationOrdersService.js'
 
 function AppShell() {
   const { state: projState, dispatch } = useProjects()
@@ -108,6 +115,8 @@ function AppShellInner({ projState, dispatch }) {
   const [savedDocsImporting, setSavedDocsImporting] = useState(false)
   const [pendingMigrationCount, setPendingMigrationCount] = useState(0)
   const [draftRecovered, setDraftRecovered] = useState(false)
+  const [variationOrders, setVariationOrders] = useState([])
+  const [voInitialAction, setVoInitialAction] = useState(null)
 
   const refreshPendingMigrationCount = useCallback(async () => {
     const localDocs = loadSavedDocuments()
@@ -222,6 +231,49 @@ function AppShellInner({ projState, dispatch }) {
   useEffect(() => {
     refreshSavedDocuments()
   }, [refreshSavedDocuments])
+
+  const refreshVariationOrders = useCallback(async () => {
+    try {
+      const { orders } = await loadAllVariationOrders()
+      setVariationOrders(orders)
+    } catch (e) {
+      console.error('[variation] load failed', e)
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshVariationOrders()
+  }, [refreshVariationOrders])
+
+  const handleSaveVariationOrder = useCallback(async (vo) => {
+    const result = await saveVariationOrderUnified(vo)
+    if (result.ok) {
+      await refreshVariationOrders()
+      if (result.warning) toast.warn('Saved locally', result.warning)
+      else toast.success('Variation saved', result.order?.variationNumber)
+    } else {
+      toast.error('Save failed', result.error)
+    }
+    return result
+  }, [refreshVariationOrders, toast])
+
+  const handleDeleteVariationOrder = useCallback(async (id) => {
+    const result = await deleteVariationOrderUnified(id)
+    if (result.ok) {
+      await refreshVariationOrders()
+      if (result.error) toast.warn('Deleted locally', result.error)
+      else toast.success('Variation deleted')
+    } else {
+      toast.error('Delete failed', result.error)
+    }
+  }, [refreshVariationOrders, toast])
+
+  const handleVariationQuickAction = useCallback((mode) => {
+    setVoInitialAction(mode)
+    setTab('variation')
+  }, [])
+
+  const clearVoInitialAction = useCallback(() => setVoInitialAction(null), [])
 
   useEffect(() => {
     loadAllPriceProfiles().then(({ state }) => {
@@ -526,6 +578,29 @@ function AppShellInner({ projState, dispatch }) {
     chat.send(text, null, (kind, title, body, action) => toast[kind]?.(title, body, action))
   }, [chat, toast])
 
+  const handleVariationAIAssist = useCallback((prompt) => {
+    firePrompt(prompt)
+  }, [firePrompt])
+
+  const handleImportVariation = useCallback(async (items) => {
+    const vo = createNewVariationOrder({
+      items,
+      reasonForVariation: 'Imported from AI variation schedule',
+      sourceType: 'manual',
+      projectName: intelligence.data.projectInfo?.title || '',
+      clientName: intelligence.data.client?.name || '',
+      originalEstimateRef: intelligence.data.projectInfo?.quoteNum || '',
+      originalEstimateTotal: intelligence.data.pricing?.summary?.grand || 0,
+      originalBoqSnapshot: JSON.parse(JSON.stringify(intelligence.data.boqItems || [])),
+    }, variationOrders)
+    const result = await saveVariationOrderUnified(vo)
+    if (result.ok) {
+      await refreshVariationOrders()
+      setTab('variation')
+      toast.success(`${items.length} items imported to ${result.order?.variationNumber}`)
+    }
+  }, [intelligence, variationOrders, refreshVariationOrders, toast])
+
   // ── BOQ import from AI ───────────────────────────────────────────────────
   const handleImportBOQ = useCallback((rows) => {
     intelligence.mergeFromExtract({ boqRows: rows })
@@ -768,7 +843,9 @@ function AppShellInner({ projState, dispatch }) {
         onTabChange={setTab}
         boqCount={boq.rows.length}
         savedDocCount={savedDocuments.length}
+        voCount={variationOrders.length}
         onQuickAction={firePrompt}
+        onVariationAction={handleVariationQuickAction}
         aiBusy={chat.busy}
       />
 
@@ -792,6 +869,7 @@ function AppShellInner({ projState, dispatch }) {
             chat={chat}
             prices={prices}
             onImportBOQ={handleImportBOQ}
+            onImportVariation={handleImportVariation}
             onSendToDocGen={handleSendToDocGen}
             onOpenQSWorkflow={handleOpenQSWorkflow}
             onOpenSaveProject={handleOpenSaveProject}
@@ -867,6 +945,22 @@ function AppShellInner({ projState, dispatch }) {
             onSendToDocGen={handleBOQToDocGen}
             onAIReview={(rows) => firePrompt(buildBOQReviewPrompt(rows))}
             aiBusy={chat.busy}
+          />
+        )}
+
+        {tab === 'variation' && (
+          <VariationOrderPage
+            variationOrders={variationOrders}
+            onRefresh={refreshVariationOrders}
+            onSave={handleSaveVariationOrder}
+            onDelete={handleDeleteVariationOrder}
+            savedDocuments={savedDocuments}
+            projects={projState.projects}
+            intelligence={intelligence}
+            onAIAssist={handleVariationAIAssist}
+            aiBusy={chat.busy}
+            initialAction={voInitialAction}
+            onClearInitialAction={clearVoInitialAction}
           />
         )}
 

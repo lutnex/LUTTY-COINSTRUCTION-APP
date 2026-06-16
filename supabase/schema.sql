@@ -130,3 +130,36 @@ DROP POLICY IF EXISTS "Allow public update price_profile_items" ON price_profile
 CREATE POLICY "Allow public update price_profile_items" ON price_profile_items FOR UPDATE USING (true);
 DROP POLICY IF EXISTS "Allow public delete price_profile_items" ON price_profile_items;
 CREATE POLICY "Allow public delete price_profile_items" ON price_profile_items FOR DELETE USING (true);
+
+-- Variation Orders (separate from original estimates — never overwrites issued estimates)
+CREATE TABLE IF NOT EXISTS variation_orders (
+  id TEXT PRIMARY KEY,
+  variation_number TEXT NOT NULL DEFAULT '',
+  project_id TEXT DEFAULT '',
+  project_name TEXT DEFAULT '',
+  client_name TEXT DEFAULT '',
+  original_estimate_id TEXT DEFAULT '',
+  original_estimate_ref TEXT DEFAULT '',
+  original_estimate_total NUMERIC DEFAULT 0,
+  revised_total NUMERIC DEFAULT 0,
+  status TEXT DEFAULT 'draft',
+  vo_date DATE,
+  snapshot JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS variation_orders_project_id_idx ON variation_orders (project_id);
+CREATE INDEX IF NOT EXISTS variation_orders_updated_at_idx ON variation_orders (updated_at DESC);
+CREATE INDEX IF NOT EXISTS variation_orders_original_estimate_idx ON variation_orders (original_estimate_id);
+
+ALTER TABLE variation_orders ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public read variation_orders" ON variation_orders;
+CREATE POLICY "Allow public read variation_orders" ON variation_orders FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow public insert variation_orders" ON variation_orders;
+CREATE POLICY "Allow public insert variation_orders" ON variation_orders FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow public update variation_orders" ON variation_orders;
+CREATE POLICY "Allow public update variation_orders" ON variation_orders FOR UPDATE USING (true);
+DROP POLICY IF EXISTS "Allow public delete variation_orders" ON variation_orders;
+CREATE POLICY "Allow public delete variation_orders" ON variation_orders FOR DELETE USING (true);

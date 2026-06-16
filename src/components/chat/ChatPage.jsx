@@ -5,7 +5,7 @@ import WorkflowPanel from './WorkflowPanel.jsx'
 import { useToast } from '../../context/ToastContext.jsx'
 
 export default function ChatPage({
-  chat, prices, onImportBOQ, onSendToDocGen, onOpenQSWorkflow, onOpenSaveProject,
+  chat, prices, onImportBOQ, onImportVariation, onSendToDocGen, onOpenQSWorkflow, onOpenSaveProject,
   onExtractPrices, onSavePricesToProfile, onChoosePricingSource,
   onPDFExport, onStartNewProject, projState, dispatch, setTab,
 }) {
@@ -112,6 +112,7 @@ export default function ChatPage({
                 <WorkflowPanel
                   extract={m.extract}
                   onImportBOQ={onImportBOQ}
+                  onImportVariation={onImportVariation}
                   onSendToDocGen={onSendToDocGen}
                   onOpenQSWorkflow={onOpenQSWorkflow}
                   onOpenSaveProject={onOpenSaveProject}

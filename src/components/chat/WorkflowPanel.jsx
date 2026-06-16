@@ -13,6 +13,7 @@ export default function WorkflowPanel({
   onSavePricesToProfile,
   onChoosePricingSource,
   onPDFExport,
+  onImportVariation,
   projState,
   dispatch,
   setTab,
@@ -21,7 +22,7 @@ export default function WorkflowPanel({
   const [pdfBusy, setPdfBusy] = useState(false)
 
   if (!extract) return null
-  if (!extract.hasBOQ && !extract.hasEstimate && !extract.hasRisks) return null
+  if (!extract.hasBOQ && !extract.hasEstimate && !extract.hasRisks && !extract.hasVariation) return null
 
   const openWorkflow = (opts = {}) => {
     if (onOpenQSWorkflow) onOpenQSWorkflow(extract, opts)
@@ -79,6 +80,11 @@ export default function WorkflowPanel({
         <button onClick={() => openWorkflow({ initialStep: 3, initialStyle: PRESENTATION_STYLES.PREMIUM })} style={wBtn('sky')}>A. Premium Quotation</button>
         <button onClick={() => openWorkflow({ initialStep: 3, initialStyle: PRESENTATION_STYLES.DETAILED })} style={wBtn('outline')}>B. Detailed BOQ</button>
         <button onClick={() => openWorkflow({ initialStep: 4 })} style={wBtn('amber')}>→ Export to Document Generator</button>
+        {extract.hasVariation && extract.variationItems?.length > 0 && (
+          <button onClick={() => { onImportVariation?.(extract.variationItems); setTab?.('variation') }} style={wBtn('sky')}>
+            📝 Import to Variation Order ({extract.variationItems.length})
+          </button>
+        )}
         <button onClick={() => onOpenSaveProject?.(extract)} style={wBtn('purple')}>💾 Save Project</button>
         <button onClick={() => void handlePDF()} disabled={pdfBusy} style={{ ...wBtn('outline'), opacity: pdfBusy ? .7 : 1 }}>
           {pdfBusy ? 'Exporting…' : '⬇ Export PDF'}

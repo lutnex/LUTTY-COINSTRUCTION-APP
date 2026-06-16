@@ -358,6 +358,92 @@ function attachAIHandlers(middlewares, env) {
       }))
     }
   })
+
+  // Variation Orders API
+  middlewares.use('/api/variations/list', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.statusCode = 405
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ orders: [], error: 'Method not allowed' }))
+      return
+    }
+    if (!isSupabaseServerConfigured(env)) {
+      res.statusCode = 503
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ orders: [], error: 'Supabase is not configured' }))
+      return
+    }
+    const { fetchServerVariationOrders } = await import('./lib/variationOrderServer.js')
+    const { orders, error } = await fetchServerVariationOrders(env)
+    res.statusCode = error ? 502 : 200
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ orders, error }))
+  })
+
+  middlewares.use('/api/variations/save', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    if (req.method !== 'POST') {
+      res.statusCode = 405
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: 'Method not allowed' }))
+      return
+    }
+    if (!isSupabaseServerConfigured(env)) {
+      res.statusCode = 503
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: 'Supabase is not configured' }))
+      return
+    }
+    try {
+      const raw = await readRequestBody(req)
+      const vo = raw.length ? JSON.parse(raw.toString('utf8')) : null
+      if (!vo?.id || !vo?.variationNumber) {
+        res.statusCode = 400
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ ok: false, error: 'Invalid variation order payload' }))
+        return
+      }
+      const { upsertServerVariationOrder } = await import('./lib/variationOrderServer.js')
+      const result = await upsertServerVariationOrder(vo, env)
+      res.statusCode = result.ok ? 200 : 502
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify(result))
+    } catch (err) {
+      res.statusCode = 400
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : 'Save failed' }))
+    }
+  })
+
+  middlewares.use('/api/variations/delete', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    if (req.method !== 'POST' && req.method !== 'DELETE') {
+      res.statusCode = 405
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: 'Method not allowed' }))
+      return
+    }
+    if (!isSupabaseServerConfigured(env)) {
+      res.statusCode = 503
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: 'Supabase is not configured' }))
+      return
+    }
+    const url = new URL(req.url, 'http://localhost')
+    const id = url.searchParams.get('id')
+    if (!id) {
+      res.statusCode = 400
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ ok: false, error: 'Variation order id is required' }))
+      return
+    }
+    const { deleteServerVariationOrder } = await import('./lib/variationOrderServer.js')
+    const result = await deleteServerVariationOrder(id, env)
+    res.statusCode = result.ok ? 200 : 502
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify(result))
+  })
 }
 
 function aiProxyPlugin(mode, envDir) {
