@@ -165,10 +165,12 @@ check('price profiles API routes exist', () => {
   assert.ok(existsSync(join(root, 'api/prices/save.js')))
 })
 
-check('supabase schema includes price_profiles tables', () => {
+check('supabase schema includes variation_orders and revised_documents tables', () => {
   const sql = read('supabase/schema.sql')
-  assert.match(sql, /price_profiles/)
-  assert.match(sql, /price_profile_items/)
+  assert.match(sql, /variation_orders/)
+  assert.match(sql, /revised_documents/)
+  assert.match(sql, /variation_items JSONB/)
+  assert.match(sql, /document_data JSONB/)
 })
 
 // ── Report ──────────────────────────────────────────────────────────────────

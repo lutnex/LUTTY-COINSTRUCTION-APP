@@ -39,7 +39,7 @@ export async function fetchCloudVariationOrders() {
     .select('*')
     .order('updated_at', { ascending: false })
 
-  if (error) return { orders: [], error: formatSupabaseError(error) }
+  if (error) return { orders: [], error: formatSupabaseError(error, 'variation_orders') }
   return { orders: (data || []).map(rowToVariationOrder).filter(Boolean), error: null }
 }
 
@@ -66,7 +66,7 @@ export async function upsertCloudVariationOrder(vo) {
     .from('variation_orders')
     .upsert(variationOrderToRow(vo), { onConflict: 'id' })
 
-  if (error) return { ok: false, error: formatSupabaseError(error) }
+  if (error) return { ok: false, error: formatSupabaseError(error, 'variation_orders') }
   return { ok: true, error: null }
 }
 
@@ -89,6 +89,6 @@ export async function deleteCloudVariationOrder(id) {
   if (!supabase) return { ok: false, error: 'Supabase not initialized' }
 
   const { error } = await supabase.from('variation_orders').delete().eq('id', id)
-  if (error) return { ok: false, error: formatSupabaseError(error) }
+  if (error) return { ok: false, error: formatSupabaseError(error, 'variation_orders') }
   return { ok: true, error: null }
 }

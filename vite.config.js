@@ -11,6 +11,7 @@ import {
 import { handleDocumentsRequest } from './lib/api/documentsHandler.js'
 import { handleMaterialPricesRequest } from './lib/api/materialPricesHandler.js'
 import { handleVariationOrdersRequest } from './lib/api/variationOrdersHandler.js'
+import { handleRevisedDocumentsRequest } from './lib/api/revisedDocumentsHandler.js'
 import { adaptRequest, adaptResponse } from './lib/api/connectAdapter.js'
 
 function readRequestBody(req) {
@@ -136,6 +137,13 @@ function attachAIHandlers(middlewares, env) {
   for (const action of variationActions) {
     middlewares.use(`/api/variations/${action}`, async (req, res) => {
       await handleVariationOrdersRequest(adaptRequest(req), adaptResponse(res), env, action)
+    })
+  }
+
+  const revisedActions = ['list', 'save', 'delete']
+  for (const action of revisedActions) {
+    middlewares.use(`/api/revised/${action}`, async (req, res) => {
+      await handleRevisedDocumentsRequest(adaptRequest(req), adaptResponse(res), env, action)
     })
   }
 }

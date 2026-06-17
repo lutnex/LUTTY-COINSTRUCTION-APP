@@ -164,23 +164,88 @@ CREATE POLICY "Allow public update variation_orders" ON variation_orders FOR UPD
 DROP POLICY IF EXISTS "Allow public delete variation_orders" ON variation_orders;
 CREATE POLICY "Allow public delete variation_orders" ON variation_orders FOR DELETE USING (true);
 
--- Revised documents (links to original — never overwrites issued estimates)
+-- Revised documents (variation revisions — never overwrites issued estimates)
 CREATE TABLE IF NOT EXISTS revised_documents (
   id TEXT PRIMARY KEY,
-  parent_document_id TEXT NOT NULL,
+  original_document_id TEXT DEFAULT '',
+  project_id TEXT DEFAULT '',
+  client_name TEXT DEFAULT '',
+  project_title TEXT DEFAULT '',
   revision_number INTEGER NOT NULL DEFAULT 1,
-  variation_order_id TEXT DEFAULT '',
   variation_number TEXT DEFAULT '',
   original_total NUMERIC DEFAULT 0,
+  total_additions NUMERIC DEFAULT 0,
+  total_omissions NUMERIC DEFAULT 0,
+  total_reductions NUMERIC DEFAULT 0,
+  total_increases NUMERIC DEFAULT 0,
+  net_variation NUMERIC DEFAULT 0,
   revised_total NUMERIC DEFAULT 0,
   status TEXT DEFAULT 'draft',
-  user_notes TEXT DEFAULT '',
-  snapshot JSONB NOT NULL DEFAULT '{}',
+  document_data JSONB NOT NULL DEFAULT '{}',
+  variation_items JSONB NOT NULL DEFAULT '[]',
+  notes TEXT DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS revised_documents_parent_idx ON revised_documents (parent_document_id);
+-- Safe migration from earlier revised_documents schema (re-run in SQL Editor)
+ALTER TABLE revised_documents ADD COLUMN IF NOT EXISTS original_document_id TEXT DEFAULT '';
+ALTER TABLE revised_documents ADD COLUMN IF NOT EXISTS project_id TEXT DEFAULT '';
+ALTER TABLE revised_documents ADD COLUMN IF NOT EXISTS client_name TEXT DEFAULT '';
+ALTER TABLE revised_documents ADD COLUMN IF NOT EXISTS project_title TEXT DEFAULT '';
+ALTER TABLE revised_documents ADD COLUMN IF NOT EXISTS total_additions NUMERIC DEFAULT 0;
+ALTER TABLE revised_documents ADD COLUMN IF NOT EXISTS total_omissions NUMERIC DEFAULT 0;
+ALTER TABLE revised_documents ADD COLUMN IF NOT EXISTS total_reductions NUMERIC DEFAULT 0;
+ALTER TABLE revised_documents ADD COLUMN IF NOT EXISTS total_increases NUMERIC DEFAULT 0;
+ALTER TABLE revised_documents ADD COLUMN IF NOT EXISTS net_variation NUMERIC DEFAULT 0;
+ALTER TABLE revised_documents ADD COLUMN IF NOT EXISTS document_data JSONB DEFAULT '{}';
+ALTER TABLE revised_documents ADD COLUMN IF NOT EXISTS variation_items JSONB DEFAULT '[]';
+ALTER TABLE revised_documents ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT '';
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'revised_documents' AND column_name = 'parent_document_id'
+  ) THEN
+    UPDATE revised_documents
+    SET original_document_id = COALESCE(NULLIF(original_document_id, ''), parent_document_id)
+    WHERE COALESCE(original_document_id, '') = '' AND parent_document_id IS NOT NULL;
+    ALTER TABLE revised_documents DROP COLUMN IF EXISTS parent_document_id;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'revised_documents' AND column_name = 'snapshot'
+  ) THEN
+    UPDATE revised_documents
+    SET document_data = COALESCE(document_data, snapshot)
+    WHERE document_data IS NULL OR document_data = '{}'::jsonb;
+    ALTER TABLE revised_documents DROP COLUMN IF EXISTS snapshot;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'revised_documents' AND column_name = 'user_notes'
+  ) THEN
+    UPDATE revised_documents
+    SET notes = COALESCE(NULLIF(notes, ''), user_notes)
+    WHERE COALESCE(notes, '') = '' AND user_notes IS NOT NULL;
+    ALTER TABLE revised_documents DROP COLUMN IF EXISTS user_notes;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'revised_documents' AND column_name = 'variation_order_id'
+  ) THEN
+    ALTER TABLE revised_documents DROP COLUMN IF EXISTS variation_order_id;
+  END IF;
+END $$;
+
+ALTER TABLE variation_orders ADD COLUMN IF NOT EXISTS project_title TEXT DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS revised_documents_original_doc_idx ON revised_documents (original_document_id);
+CREATE INDEX IF NOT EXISTS revised_documents_project_idx ON revised_documents (project_id);
 CREATE INDEX IF NOT EXISTS revised_documents_updated_at_idx ON revised_documents (updated_at DESC);
 
 ALTER TABLE revised_documents ENABLE ROW LEVEL SECURITY;

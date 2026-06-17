@@ -1,15 +1,34 @@
 import { C } from '../../utils/constants.js'
-import { VO_EXPORT_TYPES, VO_EXPORT_LABELS } from '../../utils/variationOrderTypes.js'
+import {
+  VO_FILE_FORMATS,
+  VO_FILE_FORMAT_LABELS,
+  VO_EXPORT_TYPES,
+  VO_EXPORT_LABELS,
+} from '../../utils/variationOrderTypes.js'
 import { Button } from '../shared/Button.jsx'
 
-export function VariationExportDialog({ open, onClose, onExport, exporting }) {
+export function VariationExportDialog({
+  open,
+  onClose,
+  onExportFormat,
+  onExportLegacy,
+  exporting,
+  showLegacyTypes = false,
+}) {
   if (!open) return null
 
-  const options = [
-    { type: VO_EXPORT_TYPES.CLIENT_QUOTATION, label: 'A', desc: VO_EXPORT_LABELS[VO_EXPORT_TYPES.CLIENT_QUOTATION] },
-    { type: VO_EXPORT_TYPES.INTERNAL_SCHEDULE, label: 'B', desc: VO_EXPORT_LABELS[VO_EXPORT_TYPES.INTERNAL_SCHEDULE] },
-    { type: VO_EXPORT_TYPES.REVISED_ESTIMATE, label: 'C', desc: VO_EXPORT_LABELS[VO_EXPORT_TYPES.REVISED_ESTIMATE] },
-    { type: VO_EXPORT_TYPES.ADDENDUM, label: 'D', desc: VO_EXPORT_LABELS[VO_EXPORT_TYPES.ADDENDUM] },
+  const formatOptions = [
+    { format: VO_FILE_FORMATS.PDF, label: 'A' },
+    { format: VO_FILE_FORMATS.DOCX, label: 'B' },
+    { format: VO_FILE_FORMATS.CSV, label: 'C' },
+    { format: VO_FILE_FORMATS.HTML, label: 'D' },
+  ]
+
+  const legacyOptions = [
+    { type: VO_EXPORT_TYPES.CLIENT_QUOTATION, label: 'A' },
+    { type: VO_EXPORT_TYPES.INTERNAL_SCHEDULE, label: 'B' },
+    { type: VO_EXPORT_TYPES.REVISED_ESTIMATE, label: 'C' },
+    { type: VO_EXPORT_TYPES.ADDENDUM, label: 'D' },
   ]
 
   return (
@@ -19,20 +38,20 @@ export function VariationExportDialog({ open, onClose, onExport, exporting }) {
     }}>
       <div style={{
         background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12,
-        padding: 24, width: 480, maxWidth: '92vw',
+        padding: 24, width: 520, maxWidth: '92vw', maxHeight: '90vh', overflowY: 'auto',
       }}>
         <div style={{ fontFamily: "'Bebas Neue'", fontSize: 22, color: C.amber, letterSpacing: '1.5px', marginBottom: 4 }}>
-          Export Variation
+          Export As
         </div>
         <div style={{ fontSize: 12, color: C.textDim, marginBottom: 16 }}>
-          Choose variation document type before export:
+          Choose file format for this variation order:
         </div>
 
-        {options.map(opt => (
+        {formatOptions.map(opt => (
           <button
-            key={opt.type}
+            key={opt.format}
             disabled={exporting}
-            onClick={() => onExport(opt.type)}
+            onClick={() => onExportFormat?.(opt.format)}
             style={{
               display: 'block', width: '100%', textAlign: 'left',
               background: C.panel2, border: `1px solid ${C.border}`, borderRadius: 8,
@@ -43,9 +62,33 @@ export function VariationExportDialog({ open, onClose, onExport, exporting }) {
             onMouseLeave={e => { e.currentTarget.style.borderColor = C.border }}
           >
             <span style={{ fontFamily: 'IBM Plex Mono', fontSize: 11, color: C.amber, marginRight: 8 }}>{opt.label}.</span>
-            <span style={{ fontSize: 13 }}>{opt.desc}</span>
+            <span style={{ fontSize: 13 }}>{VO_FILE_FORMAT_LABELS[opt.format]}</span>
           </button>
         ))}
+
+        {showLegacyTypes && onExportLegacy && (
+          <>
+            <div style={{ fontSize: 11, color: C.textFaint, margin: '14px 0 10px', fontFamily: 'IBM Plex Mono' }}>
+              LEGACY DOCUMENT STYLES
+            </div>
+            {legacyOptions.map(opt => (
+              <button
+                key={opt.type}
+                disabled={exporting}
+                onClick={() => onExportLegacy(opt.type)}
+                style={{
+                  display: 'block', width: '100%', textAlign: 'left',
+                  background: C.panel2, border: `1px solid ${C.border}`, borderRadius: 8,
+                  padding: '10px 14px', marginBottom: 8, cursor: exporting ? 'not-allowed' : 'pointer',
+                  color: C.textDim, fontSize: 12,
+                }}
+              >
+                <span style={{ fontFamily: 'IBM Plex Mono', fontSize: 10, color: C.textFaint, marginRight: 8 }}>{opt.label}.</span>
+                {VO_EXPORT_LABELS[opt.type]}
+              </button>
+            ))}
+          </>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
           <Button variant="ghost" onClick={onClose} disabled={exporting}>Cancel</Button>

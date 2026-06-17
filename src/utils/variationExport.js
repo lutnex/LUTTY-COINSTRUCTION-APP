@@ -5,7 +5,9 @@ import {
   CHANGE_TYPE_LABELS,
   ITEM_STATUS_LABELS,
   VO_EXPORT_LABELS,
+  VO_FILE_FORMATS,
 } from './variationOrderTypes.js'
+import { computeVariationTotals } from './variationCalculations.js'
 
 function esc(s) {
   return String(s ?? '')
@@ -368,4 +370,275 @@ export function printVariationHTML(html) {
       win.onload = () => setTimeout(doPrint, 500)
     }
   })
+}
+
+function totalsMatch(a, b, tolerance = 0.02) {
+  const keys = [
+    'originalEstimateTotal', 'totalAdditions', 'totalOmissions',
+    'totalReductions', 'totalIncreases', 'netVariation', 'revisedTotal',
+  ]
+  return keys.every((key) => Math.abs((a[key] || 0) - (b[key] || 0)) <= tolerance)
+}
+
+/** Validate variation before save/export. */
+export function validateVariationForExport(vo, calculations) {
+  const errors = []
+  const title = (vo?.projectName || vo?.projectTitle || '').trim()
+  if (!title) errors.push('Document title (project name) is required')
+  if (!vo?.variationNumber?.trim()) errors.push('Variation number is required')
+  if (!vo?.items?.length) errors.push('At least one variation item is required')
+
+  const fresh = computeVariationTotals(vo.items || [], vo.originalEstimateTotal)
+  const calc = calculations || fresh
+  if (!totalsMatch(fresh, calc)) {
+    errors.push('Totals are out of date — review calculations before continuing')
+  }
+
+  const expectedRevised = Math.round((calc.originalEstimateTotal + calc.netVariation) * 100) / 100
+  if (Math.abs(expectedRevised - calc.revisedTotal) > 0.02) {
+    errors.push('Revised total does not match original + net variation')
+  }
+
+  return { ok: errors.length === 0, errors }
+}
+
+/** Client-facing formal variation order with full item table (PDF/DOCX). */
+export function buildFormalVariationOrderHTML(vo, calculations) {
+  const body = `
+${buildHeader('VARIATION ORDER', vo.variationNumber || 'Variation Order')}
+${metaGrid([
+  ['Original Estimate Ref', vo.originalEstimateRef],
+  ['Client', vo.clientName],
+  ['Project', vo.projectName],
+  ['Location', vo.projectLocation],
+  ['Date', fmtDate(vo.date)],
+  ['Variation No.', vo.variationNumber],
+])}
+<div class="sec">Reason for Variation</div>
+<div class="notes">${esc(vo.reasonForVariation || 'As instructed by client.').replace(/\n/g, '<br/>')}</div>
+<div class="sec">Variation Schedule</div>
+${fullItemTable(vo.items, true)}
+${summaryBlock(calculations)}
+<div class="sec">Payment &amp; Approval</div>
+<div class="notes">${esc(vo.paymentNote || 'This variation is subject to written client approval before additional works commence.')}</div>
+${signatureBlock()}
+${buildFooter()}`
+
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><title>${esc(vo.variationNumber)} — Variation Order</title><style>${BASE_STYLES}</style></head><body>${body}</body></html>`
+}
+
+export function getVariationFileBasename(vo) {
+  return (vo.variationNumber || 'VO').replace(/\s+/g, '-')
+}
+
+export function getVariationFormatFilename(vo, format) {
+  const slug = getVariationFileBasename(vo)
+  const ext = {
+    [VO_FILE_FORMATS.PDF]: 'pdf',
+    [VO_FILE_FORMATS.DOCX]: 'docx',
+    [VO_FILE_FORMATS.CSV]: 'csv',
+    [VO_FILE_FORMATS.HTML]: 'html',
+  }[format] || 'html'
+  return `${slug}-variation-order.${ext}`
+}
+
+function triggerBlobDownload(blob, filename) {
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(a.href)
+}
+
+function csvEscape(value) {
+  const s = String(value ?? '')
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+  return s
+}
+
+export function buildVariationCSV(vo) {
+  const headers = [
+    'Item No', 'Original Ref', 'Change Type', 'Description',
+    'Original Qty', 'Revised Qty', 'Unit', 'Original Rate', 'Revised Rate',
+    'Original Amount', 'Revised Amount', 'Difference', 'Reason', 'Status',
+  ]
+  const rows = (vo.items || []).map(item => [
+    item.itemNo,
+    item.originalItemRef,
+    CHANGE_TYPE_LABELS[item.changeType] || item.changeType,
+    item.description,
+    item.originalQty,
+    item.revisedQty,
+    item.unit,
+    item.originalRate,
+    item.revisedRate,
+    item.originalAmount,
+    item.revisedAmount,
+    item.difference,
+    item.reason,
+    ITEM_STATUS_LABELS[item.status] || item.status,
+  ])
+  return [headers, ...rows].map(row => row.map(csvEscape).join(',')).join('\r\n')
+}
+
+export function downloadVariationCSV(vo) {
+  const csv = buildVariationCSV(vo)
+  const blob = new Blob(['\ufeff', csv], { type: 'text/csv;charset=utf-8' })
+  triggerBlobDownload(blob, getVariationFormatFilename(vo, VO_FILE_FORMATS.CSV))
+}
+
+export function downloadVariationDOCX(html, vo) {
+  const bodyMatch = /<body[^>]*>([\s\S]*)<\/body>/i.exec(html)
+  const body = bodyMatch ? bodyMatch[1] : html
+  const docHtml = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><title>${esc(vo.variationNumber)}</title></head><body>${body}</body></html>`
+  const blob = new Blob(['\ufeff', docHtml], { type: 'application/msword' })
+  triggerBlobDownload(blob, getVariationFormatFilename(vo, VO_FILE_FORMATS.DOCX))
+}
+
+let jsPDFReady = false
+
+async function ensureJsPDF() {
+  if (jsPDFReady || window.jspdf) {
+    jsPDFReady = true
+    return true
+  }
+  const loadScripts = new Promise((resolve) => {
+    const s = document.createElement('script')
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
+    s.onload = () => {
+      const s2 = document.createElement('script')
+      s2.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js'
+      s2.onload = () => { jsPDFReady = true; resolve(true) }
+      s2.onerror = () => resolve(false)
+      document.head.appendChild(s2)
+    }
+    s.onerror = () => resolve(false)
+    document.head.appendChild(s)
+  })
+  const timedOut = new Promise(resolve => setTimeout(() => resolve(false), 12000))
+  return Promise.race([loadScripts, timedOut])
+}
+
+async function generateVariationPDFBytes(vo, calculations) {
+  const ready = await ensureJsPDF()
+  if (!ready || !window.jspdf) return null
+
+  const { jsPDF } = window.jspdf
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+  const margin = 14
+  let y = margin
+
+  const addLine = (text, size = 10, bold = false) => {
+    doc.setFont('helvetica', bold ? 'bold' : 'normal')
+    doc.setFontSize(size)
+    const lines = doc.splitTextToSize(text, 182)
+    if (y + lines.length * 5 > 285) {
+      doc.addPage()
+      y = margin
+    }
+    doc.text(lines, margin, y)
+    y += lines.length * 5 + 2
+  }
+
+  addLine(COMPANY.name, 14, true)
+  addLine('VARIATION ORDER', 12, true)
+  addLine(vo.variationNumber || '', 11, true)
+  y += 2
+  addLine(`Client: ${vo.clientName || '—'}`)
+  addLine(`Project: ${vo.projectName || '—'}`)
+  addLine(`Original Ref: ${vo.originalEstimateRef || '—'}`)
+  addLine(`Date: ${fmtDate(vo.date)}`)
+  y += 2
+  addLine('Reason for Variation', 10, true)
+  addLine(vo.reasonForVariation || 'As instructed by client.', 9)
+
+  const items = (vo.items || []).filter(i => i.status !== 'rejected')
+  if (items.length && doc.autoTable) {
+    y += 2
+    doc.autoTable({
+      startY: y,
+      head: [[
+        '#', 'Description', 'Type', 'Orig Amt', 'Rev Amt', 'Diff',
+      ]],
+      body: items.map(i => [
+        String(i.itemNo),
+        i.description || '',
+        CHANGE_TYPE_LABELS[i.changeType] || i.changeType,
+        ghs(i.originalAmount),
+        ghs(i.revisedAmount),
+        `${i.difference >= 0 ? '' : '−'}${ghs(Math.abs(i.difference))}`,
+      ]),
+      styles: { fontSize: 7, cellPadding: 1.5 },
+      headStyles: { fillColor: [10, 42, 67] },
+      margin: { left: margin, right: margin },
+    })
+    y = doc.lastAutoTable.finalY + 6
+  }
+
+  const summary = [
+    ['Original Total', ghs(calculations.originalEstimateTotal)],
+    ['Total Additions', ghs(calculations.totalAdditions)],
+    ['Total Omissions', `− ${ghs(calculations.totalOmissions)}`],
+    ['Total Reductions', `− ${ghs(calculations.totalReductions)}`],
+    ['Net Variation', ghs(calculations.netVariation)],
+    ['Revised Total', ghs(calculations.revisedTotal)],
+  ]
+  for (const [label, val] of summary) {
+    if (y > 275) { doc.addPage(); y = margin }
+    doc.setFont('helvetica', label === 'Revised Total' ? 'bold' : 'normal')
+    doc.setFontSize(label === 'Revised Total' ? 11 : 9)
+    doc.text(label, margin, y)
+    doc.text(val, 196, y, { align: 'right' })
+    y += 6
+  }
+
+  y += 4
+  addLine('Approval / Signatures', 10, true)
+  addLine('Client Authorised Signature: _________________________   Date: __________')
+  addLine(`${COMPANY.authorizedBy} — ${COMPANY.position}: _________________________   Date: __________`, 9)
+
+  return doc.output('arraybuffer')
+}
+
+export async function downloadVariationPDF(vo, calculations, onProgress) {
+  onProgress?.('Generating PDF…')
+  try {
+    const bytes = await generateVariationPDFBytes(vo, calculations)
+    if (bytes) {
+      onProgress?.('Saving PDF…')
+      const blob = new Blob([bytes], { type: 'application/pdf' })
+      triggerBlobDownload(blob, getVariationFormatFilename(vo, VO_FILE_FORMATS.PDF))
+      return { ok: true, method: 'pdf' }
+    }
+  } catch (e) {
+    console.error('[variation-export] PDF failed', e)
+  }
+
+  const html = buildFormalVariationOrderHTML(vo, calculations)
+  downloadVariationHTML(html, getVariationFormatFilename(vo, VO_FILE_FORMATS.PDF))
+  return {
+    ok: true,
+    method: 'html',
+    message: 'PDF engine unavailable — HTML downloaded. Open and Print → Save as PDF.',
+  }
+}
+
+export async function exportVariationFormat(vo, format, calculations, onProgress) {
+  const html = buildFormalVariationOrderHTML(vo, calculations)
+  switch (format) {
+    case VO_FILE_FORMATS.PDF:
+      return downloadVariationPDF(vo, calculations, onProgress)
+    case VO_FILE_FORMATS.DOCX:
+      downloadVariationDOCX(html, vo)
+      return { ok: true, method: 'docx' }
+    case VO_FILE_FORMATS.CSV:
+      downloadVariationCSV(vo)
+      return { ok: true, method: 'csv' }
+    case VO_FILE_FORMATS.HTML:
+    default:
+      downloadVariationHTML(html, getVariationFormatFilename(vo, VO_FILE_FORMATS.HTML))
+      return { ok: true, method: 'html' }
+  }
 }

@@ -102,6 +102,7 @@ import { applyCalculationsToOrder } from './utils/variationCalculations.js'
 import {
   loadAllVariationOrders,
   saveVariationOrderUnified,
+  saveRevisedDocumentUnified,
   deleteVariationOrderUnified,
   createNewVariationOrder,
 } from './services/variationOrdersService.js'
@@ -309,6 +310,18 @@ function AppShellInner({ projState, dispatch }) {
     }
     return result
   }, [refreshVariationOrders, toast])
+
+  const handleSaveVariationRevisedDocument = useCallback(async (vo) => {
+    const result = await saveRevisedDocumentUnified(vo)
+    if (result.ok) {
+      if (result.localDocument) await refreshSavedDocuments()
+      if (result.warning) toast.warn('Revised document saved locally', result.warning)
+      else toast.success('Revised document saved', vo.variationNumber)
+    } else {
+      toast.error('Save failed', result.error)
+    }
+    return result
+  }, [refreshSavedDocuments, toast])
 
   const handleDeleteVariationOrder = useCallback(async (id) => {
     const result = await deleteVariationOrderUnified(id)
@@ -1486,6 +1499,7 @@ function AppShellInner({ projState, dispatch }) {
             variationOrders={variationOrders}
             onRefresh={refreshVariationOrders}
             onSave={handleSaveVariationOrder}
+            onSaveRevised={handleSaveVariationRevisedDocument}
             onDelete={handleDeleteVariationOrder}
             savedDocuments={savedDocuments}
             projects={projState.projects}
@@ -1494,6 +1508,7 @@ function AppShellInner({ projState, dispatch }) {
             aiBusy={chat.busy}
             initialAction={voInitialAction}
             onClearInitialAction={clearVoInitialAction}
+            toast={toast}
           />
         )}
 

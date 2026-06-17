@@ -10,6 +10,7 @@ import {
   VO_SOURCE_TYPES,
   VO_STATUSES,
   VO_STATUS_LABELS,
+  VO_FILE_FORMATS,
   createEmptyVariationItem,
   appendAuditEntry,
 } from '../../utils/variationOrderTypes.js'
@@ -24,6 +25,8 @@ import {
   buildVariationExportHTML,
   getVariationExportFilename,
   downloadVariationHTML,
+  validateVariationForExport,
+  exportVariationFormat,
 } from '../../utils/variationExport.js'
 import { extractFileContent } from '../../utils/fileExtractor.js'
 import { coerceFieldValue, readSelectValue, sanitizePatch } from '../../utils/safeSerialize.js'
@@ -83,6 +86,7 @@ export function VariationOrderPage({
   variationOrders = [],
   onRefresh,
   onSave,
+  onSaveRevised,
   onDelete,
   savedDocuments = [],
   projects = [],
@@ -91,6 +95,7 @@ export function VariationOrderPage({
   aiBusy,
   initialAction,
   onClearInitialAction,
+  toast,
 }) {
   const [activeVO, setActiveVO] = useState(null)
   const [view, setView] = useState('list')
@@ -98,6 +103,8 @@ export function VariationOrderPage({
   const [exportOpen, setExportOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [savingRevised, setSavingRevised] = useState(false)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const [uploadText, setUploadText] = useState('')
   const [clientChanges, setClientChanges] = useState('')
   const fileRef = useRef(null)
@@ -172,8 +179,23 @@ export function VariationOrderPage({
     }))
   }, [])
 
+  const validateActiveVO = useCallback(() => {
+    if (!activeVO || !calculations) {
+      toast?.error?.('Validation failed', 'No variation loaded')
+      return false
+    }
+    const vo = applyCalculationsToOrder(activeVO)
+    const check = validateVariationForExport(vo, calculations)
+    if (!check.ok) {
+      toast?.error?.('Cannot continue', check.errors.join(' · '))
+      return false
+    }
+    return true
+  }, [activeVO, calculations, toast])
+
   const handleSave = useCallback(async () => {
     if (!activeVO) return
+    if (!validateActiveVO()) return
     setSaving(true)
     const withAudit = appendAuditEntry(activeVO, 'saved', `Variation ${activeVO.variationNumber} saved`)
     const result = await onSave?.(withAudit)
@@ -181,10 +203,41 @@ export function VariationOrderPage({
       setActiveVO(result.order || withAudit)
     }
     setSaving(false)
-  }, [activeVO, onSave])
+  }, [activeVO, onSave, validateActiveVO])
 
-  const handleExport = useCallback(async (exportType) => {
+  const handleSaveRevised = useCallback(async () => {
+    if (!activeVO) return
+    if (!validateActiveVO()) return
+    setSavingRevised(true)
+    const withAudit = appendAuditEntry(activeVO, 'revised_saved', `Revised document for ${activeVO.variationNumber} saved`)
+    const result = await onSaveRevised?.(withAudit)
+    if (result?.ok) {
+      setActiveVO(withAudit)
+    }
+    setSavingRevised(false)
+  }, [activeVO, onSaveRevised, validateActiveVO])
+
+  const runExport = useCallback(async (format) => {
     if (!activeVO || !calculations) return
+    if (!validateActiveVO()) return
+    setExporting(true)
+    setExportMenuOpen(false)
+    try {
+      const vo = applyCalculationsToOrder(activeVO)
+      const result = await exportVariationFormat(vo, format, calculations)
+      if (result.message) toast?.warn?.('Export note', result.message)
+      else toast?.success?.('Export complete', format.toUpperCase())
+      setExportOpen(false)
+    } catch (err) {
+      toast?.error?.('Export failed', err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setExporting(false)
+    }
+  }, [activeVO, calculations, validateActiveVO, toast])
+
+  const handleExportLegacy = useCallback(async (exportType) => {
+    if (!activeVO || !calculations) return
+    if (!validateActiveVO()) return
     setExporting(true)
     try {
       const vo = applyCalculationsToOrder(activeVO)
@@ -192,10 +245,11 @@ export function VariationOrderPage({
       const filename = getVariationExportFilename(vo, exportType)
       downloadVariationHTML(html, filename)
       setExportOpen(false)
+      toast?.success?.('Export complete', 'HTML')
     } finally {
       setExporting(false)
     }
-  }, [activeVO, calculations])
+  }, [activeVO, calculations, validateActiveVO, toast])
 
   const handleFileUpload = useCallback(async (e) => {
     const file = e.target.files?.[0]
@@ -334,10 +388,62 @@ export function VariationOrderPage({
               Original: {activeVO?.originalEstimateRef || '—'} · {activeVO?.projectName || 'No project'}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <Button variant="ghost" onClick={() => { setView('list'); setActiveVO(null) }}>← Back</Button>
-            <Button variant="outline" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : '💾 Save'}</Button>
-            <Button variant="sky" onClick={() => setExportOpen(true)}>📄 Export</Button>
+            <Button variant="outline" onClick={handleSave} disabled={saving || exporting}>
+              {saving ? 'Saving…' : '💾 Save'}
+            </Button>
+            <Button variant="outline" onClick={handleSaveRevised} disabled={savingRevised || exporting}>
+              {savingRevised ? 'Saving…' : '📁 Save Revised Document'}
+            </Button>
+            <div style={{ position: 'relative' }}>
+              <Button
+                variant="sky"
+                onClick={() => setExportMenuOpen(v => !v)}
+                disabled={exporting}
+              >
+                {exporting ? 'Exporting…' : '⬇ Export As'}
+              </Button>
+              {exportMenuOpen && (
+                <div style={{
+                  position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 50,
+                  background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8,
+                  minWidth: 200, boxShadow: '0 8px 24px rgba(0,0,0,.35)',
+                }}>
+                  {[
+                    [VO_FILE_FORMATS.PDF, 'Download PDF'],
+                    [VO_FILE_FORMATS.DOCX, 'Download DOCX'],
+                    [VO_FILE_FORMATS.CSV, 'Download CSV'],
+                    [VO_FILE_FORMATS.HTML, 'Download HTML'],
+                  ].map(([format, label]) => (
+                    <button
+                      key={format}
+                      type="button"
+                      disabled={exporting}
+                      onClick={() => runExport(format)}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left',
+                        background: 'transparent', border: 'none', borderBottom: `1px solid ${C.border}`,
+                        padding: '10px 14px', color: C.text, fontSize: 12, cursor: 'pointer',
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => { setExportMenuOpen(false); setExportOpen(true) }}
+                    style={{
+                      display: 'block', width: '100%', textAlign: 'left',
+                      background: 'transparent', border: 'none',
+                      padding: '10px 14px', color: C.textDim, fontSize: 11, cursor: 'pointer',
+                    }}
+                  >
+                    More export options…
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -542,8 +648,10 @@ export function VariationOrderPage({
       <VariationExportDialog
         open={exportOpen}
         onClose={() => setExportOpen(false)}
-        onExport={handleExport}
+        onExportFormat={runExport}
+        onExportLegacy={handleExportLegacy}
         exporting={exporting}
+        showLegacyTypes
       />
     </div>
   )

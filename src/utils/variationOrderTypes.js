@@ -73,6 +73,21 @@ export const VO_EXPORT_TYPES = {
   ADDENDUM: 'addendum',
 }
 
+/** File format exports for Variation Order page */
+export const VO_FILE_FORMATS = {
+  PDF: 'pdf',
+  DOCX: 'docx',
+  CSV: 'csv',
+  HTML: 'html',
+}
+
+export const VO_FILE_FORMAT_LABELS = {
+  [VO_FILE_FORMATS.PDF]: 'PDF — Client-facing variation order',
+  [VO_FILE_FORMATS.DOCX]: 'DOCX — Editable formal variation document',
+  [VO_FILE_FORMATS.CSV]: 'CSV — Variation schedule table',
+  [VO_FILE_FORMATS.HTML]: 'HTML — Print-ready web document',
+}
+
 export const VO_EXPORT_LABELS = {
   [VO_EXPORT_TYPES.CLIENT_QUOTATION]: 'Client-facing Variation Quotation',
   [VO_EXPORT_TYPES.INTERNAL_SCHEDULE]: 'Internal Detailed Variation Schedule',

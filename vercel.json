@@ -26,6 +26,7 @@
     { "source": "/api/materials/:action", "destination": "/api/material-prices?resource=materials&action=:action" },
     { "source": "/api/prices/:action", "destination": "/api/material-prices?resource=prices&action=:action" },
     { "source": "/api/variations/:action", "destination": "/api/variation-orders?action=:action" },
+    { "source": "/api/revised/:action", "destination": "/api/revised-documents?action=:action" },
     { "source": "/api/ai/health", "destination": "/api/ai-proxy" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
