@@ -1,3 +1,5 @@
+import { safeLocalStorageSetItem, safeParseJson, sanitizeSerializableState } from './safeSerialize.js'
+
 export const CHAT_STORAGE_KEY = 'constructiq-chat-session'
 export const SESSION_STORAGE_KEY = 'constructiq-app-session'
 
@@ -14,31 +16,26 @@ export function serializeChatMessages(msgs = []) {
     tokensIn: m.tokensIn,
     tokensOut: m.tokensOut,
     durationMs: m.durationMs,
-    extract: m.extract || null,
+    extract: m.extract ? sanitizeSerializableState(m.extract) : null,
     docName: m.docName,
     attachMeta: m.attachMeta || null,
   }))
 }
 
 export function saveChatSession(msgs = []) {
-  try {
-    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify({
-      version: 1,
-      savedAt: new Date().toISOString(),
-      msgs: serializeChatMessages(msgs),
-    }))
-    return true
-  } catch (e) {
-    console.error('[chatStore] save failed', e)
-    return false
-  }
+  const result = safeLocalStorageSetItem(CHAT_STORAGE_KEY, {
+    version: 1,
+    savedAt: new Date().toISOString(),
+    msgs: serializeChatMessages(msgs),
+  })
+  if (!result.ok) console.error('[chatStore] save failed', result.error)
+  return result.ok
 }
 
 export function loadChatSession() {
   try {
     const raw = localStorage.getItem(CHAT_STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
+    const parsed = safeParseJson(raw, null)
     return Array.isArray(parsed?.msgs) ? parsed.msgs : []
   } catch {
     return []
@@ -52,24 +49,19 @@ export function clearChatSession() {
 }
 
 export function saveAppSession(session = {}) {
-  try {
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
-      version: 1,
-      savedAt: new Date().toISOString(),
-      ...session,
-    }))
-    return true
-  } catch (e) {
-    console.error('[sessionStore] save failed', e)
-    return false
-  }
+  const result = safeLocalStorageSetItem(SESSION_STORAGE_KEY, {
+    version: 1,
+    savedAt: new Date().toISOString(),
+    ...session,
+  })
+  if (!result.ok) console.error('[sessionStore] save failed', result.error)
+  return result.ok
 }
 
 export function loadAppSession() {
   try {
     const raw = localStorage.getItem(SESSION_STORAGE_KEY)
-    if (!raw) return null
-    return JSON.parse(raw)
+    return safeParseJson(raw, null)
   } catch {
     return null
   }

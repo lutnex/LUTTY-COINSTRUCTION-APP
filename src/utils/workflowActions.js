@@ -1,3 +1,5 @@
+import { safeLocalStorageSetItem, safeParseJson } from './safeSerialize.js'
+
 /** AI Workflow action ids and helpers. */
 
 import { mergeExtractIntoProjectData, projectDataToDocPayload } from './projectIntelligence.js'
@@ -288,16 +290,12 @@ export function presentationStyleLabel(style) {
 export const WORKFLOW_SESSION_KEY = 'constructiq-workflow-session'
 
 export function saveWorkflowSession(session = {}) {
-  try {
-    localStorage.setItem(WORKFLOW_SESSION_KEY, JSON.stringify({
-      version: 1,
-      savedAt: new Date().toISOString(),
-      ...session,
-    }))
-    return true
-  } catch {
-    return false
-  }
+  const result = safeLocalStorageSetItem(WORKFLOW_SESSION_KEY, {
+    version: 1,
+    savedAt: new Date().toISOString(),
+    ...session,
+  })
+  return result.ok
 }
 
 export function loadWorkflowSession() {

@@ -1,3 +1,5 @@
+import { safeLocalStorageSetItem, safeParseJson, safeJsonClone } from './safeSerialize.js'
+
 export const SAVED_DOCS_STORAGE_KEY = 'constructiq-saved-documents'
 
 export const DOCUMENT_CATEGORIES = [
@@ -20,13 +22,12 @@ export function loadSavedDocuments() {
 }
 
 export function persistSavedDocuments(docs) {
-  try {
-    localStorage.setItem(SAVED_DOCS_STORAGE_KEY, JSON.stringify(docs))
-    return true
-  } catch (e) {
-    console.error('[savedDocuments] persist failed', e)
+  const result = safeLocalStorageSetItem(SAVED_DOCS_STORAGE_KEY, docs)
+  if (!result.ok) {
+    console.error('[savedDocuments] persist failed', result.error)
     return false
   }
+  return true
 }
 
 export function createSavedDocument({ name, projectName, category, snapshot }) {
@@ -74,7 +75,7 @@ export function duplicateSavedDocument(id) {
     name: `${source.name} (Copy)`,
     projectName: source.projectName,
     category: source.category,
-    snapshot: JSON.parse(JSON.stringify(source.snapshot)),
+    snapshot: safeJsonClone(source.snapshot),
   })
   return saveDocument(copy) ? copy : null
 }

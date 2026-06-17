@@ -6,6 +6,7 @@ import {
   ITEM_STATUS_OPTIONS,
 } from '../../utils/variationOrderTypes.js'
 import { formatRevisionLabel } from '../../utils/docGenVariationTypes.js'
+import { readSelectValue } from '../../utils/safeSerialize.js'
 
 const thStyle = {
   background: C.slate, color: C.amber, padding: '6px 8px', textAlign: 'left',
@@ -51,10 +52,10 @@ export function DocGenVariationPanel({
           </div>
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <Button size="sm" onClick={onAddItem}>+ Add Line</Button>
-          {canUndo && <Button size="sm" variant="outline" onClick={onUndo}>↩ Undo</Button>}
-          <Button size="sm" variant="sky" onClick={onPreview} disabled={!items.length}>Preview Revised</Button>
-          <Button size="sm" variant="ghost" onClick={onClear}>Discard Draft</Button>
+          <Button size="sm" onClick={() => onAddItem?.()}>+ Add Line</Button>
+          {canUndo && <Button size="sm" variant="outline" onClick={() => onUndo?.()}>↩ Undo</Button>}
+          <Button size="sm" variant="sky" onClick={() => onPreview?.()} disabled={!items.length}>Preview Revised</Button>
+          <Button size="sm" variant="ghost" onClick={() => onClear?.()}>Discard Draft</Button>
         </div>
       </div>
 
@@ -83,7 +84,7 @@ export function DocGenVariationPanel({
                   <input value={item.originalItemRef || ''} onChange={e => onUpdateItem(item.id, { originalItemRef: e.target.value })} style={inputStyle} />
                 </td>
                 <td style={tdStyle}>
-                  <select value={item.changeType} onChange={e => onUpdateItem(item.id, { changeType: e.target.value })} style={{ ...inputStyle, minWidth: 100 }}>
+                  <select value={item.changeType} onChange={e => onUpdateItem(item.id, { changeType: readSelectValue(e) })} style={{ ...inputStyle, minWidth: 100 }}>
                     {CHANGE_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                 </td>
@@ -108,7 +109,7 @@ export function DocGenVariationPanel({
                 <td style={tdStyle}>
                   <select
                     value={item.includeInTotal === false ? 'no' : 'yes'}
-                    onChange={e => onUpdateItem(item.id, { includeInTotal: e.target.value === 'yes' })}
+                    onChange={e => onUpdateItem(item.id, { includeInTotal: readSelectValue(e) === 'yes' })}
                     style={inputStyle}
                   >
                     <option value="yes">Yes</option>
@@ -116,7 +117,7 @@ export function DocGenVariationPanel({
                   </select>
                 </td>
                 <td style={tdStyle}>
-                  <select value={item.status || 'pending'} onChange={e => onUpdateItem(item.id, { status: e.target.value })} style={inputStyle}>
+                  <select value={item.status || 'pending'} onChange={e => onUpdateItem(item.id, { status: readSelectValue(e) })} style={inputStyle}>
                     {ITEM_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                 </td>

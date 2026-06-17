@@ -1,3 +1,4 @@
+import { safeLocalStorageSetItem, safeParseJson, safeJsonClone } from './safeSerialize.js'
 import { today } from './formatters.js'
 import { normalizeBoqRow } from './boqItemFactory.js'
 import { computePricing } from '../services/pricing/pricingEngine.js'
@@ -145,20 +146,15 @@ export function hydrateBOQDocument(docGen, payload) {
 }
 
 export function saveDocGenDraft(payload) {
-  try {
-    localStorage.setItem(DOCGEN_STORAGE_KEY, JSON.stringify(payload))
-    return true
-  } catch (e) {
-    console.error('[boqWorkflow] save failed', e)
-    return false
-  }
+  const result = safeLocalStorageSetItem(DOCGEN_STORAGE_KEY, payload)
+  if (!result.ok) console.error('[boqWorkflow] save failed', result.error)
+  return result.ok
 }
 
 export function loadDocGenDraft() {
   try {
     const raw = localStorage.getItem(DOCGEN_STORAGE_KEY)
-    if (!raw) return null
-    return JSON.parse(raw)
+    return safeParseJson(raw, null)
   } catch (e) {
     console.error('[boqWorkflow] load failed', e)
     return null

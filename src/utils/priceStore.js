@@ -1,5 +1,6 @@
 import { DEFAULT_PRICES } from './constants.js'
 import { PRICE_ITEM_SOURCES } from './priceProfileTypes.js'
+import { safeLocalStorageSetItem } from './safeSerialize.js'
 
 export const PRICE_STORAGE_KEY = 'constructiq-price-profiles'
 
@@ -73,20 +74,16 @@ function today() {
 }
 
 export function savePriceProfileState(state) {
-  try {
-    localStorage.setItem(PRICE_STORAGE_KEY, JSON.stringify({
-      ...state,
-      version: 2,
-      profiles: state.profiles.map(p => ({
-        ...p,
-        updatedAt: today(),
-      })),
-    }))
-    return true
-  } catch (e) {
-    console.error('[priceStore] save failed', e)
-    return false
-  }
+  const result = safeLocalStorageSetItem(PRICE_STORAGE_KEY, {
+    ...state,
+    version: 2,
+    profiles: state.profiles.map(p => ({
+      ...p,
+      updatedAt: today(),
+    })),
+  })
+  if (!result.ok) console.error('[priceStore] save failed', result.error)
+  return result.ok
 }
 
 /** Backward-compatible flat list from active profile. */

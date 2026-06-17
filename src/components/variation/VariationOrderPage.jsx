@@ -26,6 +26,7 @@ import {
   downloadVariationHTML,
 } from '../../utils/variationExport.js'
 import { extractFileContent } from '../../utils/fileExtractor.js'
+import { coerceFieldValue, readSelectValue, sanitizePatch } from '../../utils/safeSerialize.js'
 
 function ghs(v) {
   const n = parseFloat(String(v ?? '').replace(/,/g, ''))
@@ -139,14 +140,18 @@ export function VariationOrderPage({
   }, [intelligence, variationOrders])
 
   const updateVO = useCallback((patch) => {
-    setActiveVO(prev => applyCalculationsToOrder({ ...prev, ...patch }))
+    const safePatch = sanitizePatch(patch)
+    if (!Object.keys(safePatch).length) return
+    setActiveVO(prev => applyCalculationsToOrder({ ...prev, ...safePatch }))
   }, [])
 
   const updateItem = useCallback((id, field, value) => {
+    const safeVal = coerceFieldValue(value)
+    if (safeVal === undefined) return
     setActiveVO(prev => {
       const items = prev.items.map(item => {
         if (item.id !== id) return item
-        const updated = recalcVariationItem({ ...item, [field]: value })
+        const updated = recalcVariationItem({ ...item, [field]: safeVal })
         return updated
       })
       return applyCalculationsToOrder({ ...prev, items })
@@ -414,7 +419,7 @@ export function VariationOrderPage({
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
         <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px' }}>
           <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-            <Button size="sm" onClick={addItem}>+ Add Line</Button>
+            <Button size="sm" onClick={() => addItem()}>+ Add Line</Button>
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
@@ -434,7 +439,7 @@ export function VariationOrderPage({
                     <td style={tdStyle}><input value={item.originalItemRef} onChange={e => updateItem(item.id, 'originalItemRef', e.target.value)} style={inputStyle} /></td>
                     <td style={{ ...tdStyle, minWidth: 140 }}><input value={item.description} onChange={e => updateItem(item.id, 'description', e.target.value)} style={inputStyle} placeholder="Description…" /></td>
                     <td style={tdStyle}>
-                      <select value={item.changeType} onChange={e => updateItem(item.id, 'changeType', e.target.value)} style={{ ...inputStyle, minWidth: 110 }}>
+                      <select value={item.changeType} onChange={e => updateItem(item.id, 'changeType', readSelectValue(e))} style={{ ...inputStyle, minWidth: 110 }}>
                         {CHANGE_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                       </select>
                     </td>
@@ -453,7 +458,7 @@ export function VariationOrderPage({
                     </td>
                     <td style={tdStyle}><input value={item.reason} onChange={e => updateItem(item.id, 'reason', e.target.value)} style={inputStyle} placeholder="Client instruction…" /></td>
                     <td style={tdStyle}>
-                      <select value={item.status} onChange={e => updateItem(item.id, 'status', e.target.value)} style={inputStyle}>
+                      <select value={item.status} onChange={e => updateItem(item.id, 'status', readSelectValue(e))} style={inputStyle}>
                         {ITEM_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                       </select>
                     </td>

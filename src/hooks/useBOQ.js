@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useEffect } from 'react'
 import { normalizeBoqRow, createEmptyRow, duplicateBoqRow } from '../utils/boqItemFactory.js'
 import { computeBoqBuilderTotals } from '../services/pricing/pricingEngine.js'
+import { coerceFieldValue } from '../utils/safeSerialize.js'
 
 /**
  * @param {object} [intelligence] — optional { data, setBoqItems } from ProjectIntelligenceContext
@@ -20,16 +21,18 @@ export function useBOQ(intelligence = null, financialAdjustments = null) {
   }, [initialized, external])
 
   const update = useCallback((id, field, val) => {
+    const safeVal = coerceFieldValue(val)
+    if (safeVal === undefined) return
     setRows(prev => prev.map(r => {
       if (r.id !== id || r.locked) return r
       if (!r.editable && field !== 'clientSupplied') return r
-      const u = { ...r, [field]: val }
+      const u = { ...r, [field]: safeVal }
       if ((field === 'qty' || field === 'rate') && !u.clientSupplied) {
         const q = parseFloat(u.qty) || 0
         const rt = parseFloat(u.rate) || 0
         u.amount = (q && rt) ? (q * rt).toFixed(2) : ''
       }
-      if (field === 'clientSupplied' && val === true) u.rate = '0'
+      if (field === 'clientSupplied' && safeVal === true) u.rate = '0'
       return u
     }))
   }, [setRows])

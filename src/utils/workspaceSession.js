@@ -6,6 +6,8 @@ import { CHAT_STORAGE_KEY, SESSION_STORAGE_KEY, serializeChatMessages } from './
 import { INTELLIGENCE_STORAGE_KEY } from './projectIntelligence.js'
 import { WORKFLOW_SESSION_KEY } from './workflowActions.js'
 import { logSessionDebug } from './sessionDebug.js'
+import { sanitizeSerializableState } from './safeSerialize.js'
+import { persistJson, loadJson, loadLastValidWorkspaceSnapshot } from './safeStorage.js'
 
 export const WORKSPACE_SNAPSHOT_KEY = 'constructiq-workspace-snapshot'
 export const WORKSPACE_SNAPSHOT_VERSION = 2
@@ -35,66 +37,62 @@ export function buildWorkspaceSnapshot({
 }
 
 export function saveWorkspaceSnapshot(snapshot) {
-  try {
-    localStorage.setItem(WORKSPACE_SNAPSHOT_KEY, JSON.stringify(snapshot))
+  const clean = sanitizeSerializableState(snapshot)
+  const result = persistJson(WORKSPACE_SNAPSHOT_KEY, clean, { mirrorValid: true })
+  if (result.ok) {
     logSessionDebug('snapshot-saved', {
-      msgs: snapshot?.chat?.length ?? 0,
-      boqItems: snapshot?.intelligence?.boqItems?.length ?? 0,
-      tab: snapshot?.tab,
+      msgs: clean?.chat?.length ?? 0,
+      boqItems: clean?.intelligence?.boqItems?.length ?? 0,
+      tab: clean?.tab,
     })
-    return true
-  } catch (e) {
-    console.error('[workspaceSession] save failed', e)
-    return false
+  } else {
+    console.warn('[workspaceSession] save skipped —', result.error)
   }
+  return result
 }
 
 export function loadWorkspaceSnapshot() {
-  try {
-    const raw = localStorage.getItem(WORKSPACE_SNAPSHOT_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return null
-    return parsed
-  } catch (e) {
-    console.error('[workspaceSession] load failed', e)
-    return null
-  }
+  return loadJson(WORKSPACE_SNAPSHOT_KEY, null)
+}
+
+export function loadValidWorkspaceSnapshot() {
+  return loadLastValidWorkspaceSnapshot(WORKSPACE_SNAPSHOT_KEY)
 }
 
 /** Restore chat + intelligence + workflow from snapshot into live stores. */
 export function applyWorkspaceSnapshotToStorage(snapshot) {
   if (!snapshot) return { ok: false, error: 'No snapshot' }
+  const clean = sanitizeSerializableState(snapshot)
   try {
-    if (Array.isArray(snapshot.chat) && snapshot.chat.length) {
-      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify({
+    if (Array.isArray(clean.chat) && clean.chat.length) {
+      persistJson(CHAT_STORAGE_KEY, {
         version: 1,
-        savedAt: snapshot.savedAt || new Date().toISOString(),
-        msgs: snapshot.chat,
-      }))
+        savedAt: clean.savedAt || new Date().toISOString(),
+        msgs: clean.chat,
+      })
     }
-    if (snapshot.intelligence && typeof snapshot.intelligence === 'object') {
-      localStorage.setItem(INTELLIGENCE_STORAGE_KEY, JSON.stringify(snapshot.intelligence))
+    if (clean.intelligence && typeof clean.intelligence === 'object') {
+      persistJson(INTELLIGENCE_STORAGE_KEY, clean.intelligence)
     }
-    if (snapshot.workflowState && typeof snapshot.workflowState === 'object') {
-      localStorage.setItem(WORKFLOW_SESSION_KEY, JSON.stringify({
+    if (clean.workflowState && typeof clean.workflowState === 'object') {
+      persistJson(WORKFLOW_SESSION_KEY, {
         version: 1,
-        savedAt: snapshot.savedAt || new Date().toISOString(),
-        ...snapshot.workflowState,
-      }))
+        savedAt: clean.savedAt || new Date().toISOString(),
+        ...clean.workflowState,
+      })
     }
-    if (snapshot.tab) {
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
+    if (clean.tab) {
+      persistJson(SESSION_STORAGE_KEY, {
         version: 1,
-        savedAt: snapshot.savedAt || new Date().toISOString(),
-        tab: snapshot.tab,
-        activeProjectId: snapshot.activeProjectId ?? null,
-        extractedPrices: snapshot.extractedPrices ?? [],
-        estimatePreferences: snapshot.estimatePreferences ?? null,
-        priceProfileActiveId: snapshot.priceProfileActiveId ?? null,
-      }))
+        savedAt: clean.savedAt || new Date().toISOString(),
+        tab: clean.tab,
+        activeProjectId: clean.activeProjectId ?? null,
+        extractedPrices: clean.extractedPrices ?? [],
+        estimatePreferences: clean.estimatePreferences ?? null,
+        priceProfileActiveId: clean.priceProfileActiveId ?? null,
+      })
     }
-    logSessionDebug('snapshot-applied-to-storage', { msgs: snapshot.chat?.length ?? 0 })
+    logSessionDebug('snapshot-applied-to-storage', { msgs: clean.chat?.length ?? 0 })
     return { ok: true }
   } catch (e) {
     console.error('[workspaceSession] apply failed', e)
@@ -104,18 +102,22 @@ export function applyWorkspaceSnapshotToStorage(snapshot) {
 
 /** Clear corrupted workflow/intelligence keys but keep chat snapshot backup. */
 export function clearBrokenWorkspaceData() {
-  const snap = loadWorkspaceSnapshot()
+  const snap = loadValidWorkspaceSnapshot() || loadWorkspaceSnapshot()
   try {
     localStorage.removeItem(INTELLIGENCE_STORAGE_KEY)
     localStorage.removeItem(WORKFLOW_SESSION_KEY)
+    localStorage.removeItem(WORKSPACE_SNAPSHOT_KEY)
     if (snap?.chat?.length) {
-      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify({
+      persistJson(CHAT_STORAGE_KEY, {
         version: 1,
         savedAt: new Date().toISOString(),
         msgs: snap.chat,
-      }))
+      })
     }
-    logSessionDebug('broken-session-cleared', { keptChat: Boolean(snap?.chat?.length) })
+    if (snap) {
+      persistJson(WORKSPACE_SNAPSHOT_KEY, snap, { mirrorValid: true })
+    }
+    logSessionDebug('broken-session-cleared', { keptChat: Boolean(snap?.chat?.length), usedValid: true })
     return true
   } catch (e) {
     console.error('[workspaceSession] clear broken failed', e)

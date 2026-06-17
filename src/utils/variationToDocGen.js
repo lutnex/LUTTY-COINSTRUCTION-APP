@@ -9,6 +9,7 @@ import { CHANGE_TYPES } from './variationOrderTypes.js'
 import { recalcVariationItem } from './variationCalculations.js'
 import { REVISED_EXPORT_STYLES } from './docGenVariationTypes.js'
 import { applyPresentationStyle, PRESENTATION_STYLES } from './qsWorkflow.js'
+import { sanitizePatch } from './safeSerialize.js'
 
 function parseNum(v) {
   const n = parseFloat(String(v ?? '').replace(/,/g, ''))
@@ -24,7 +25,7 @@ export function defaultIncludeInTotal(item) {
 }
 
 export function normalizeVariationItemForDocGen(item, index = 0) {
-  const recalc = recalcVariationItem(item)
+  const recalc = recalcVariationItem(sanitizePatch(item))
   return {
     ...recalc,
     includeInTotal: defaultIncludeInTotal(recalc),

@@ -1,4 +1,5 @@
 import { today } from './formatters.js'
+import { safeLocalStorageSetItem, safeParseJson } from './safeSerialize.js'
 import { normalizeBoqRow } from './boqItemFactory.js'
 import { computePricing } from '../services/pricing/pricingEngine.js'
 import { resolveInitialPaymentTerms, normalizePaymentTerms } from './paymentTerms.js'
@@ -177,13 +178,9 @@ export function projectDataToDocPayload(data, { docType = 'boq', source = 'intel
 }
 
 export function saveIntelligence(data) {
-  try {
-    localStorage.setItem(INTELLIGENCE_STORAGE_KEY, JSON.stringify(data))
-    return true
-  } catch (e) {
-    console.error('[intelligence] save failed', e)
-    return false
-  }
+  const result = safeLocalStorageSetItem(INTELLIGENCE_STORAGE_KEY, data)
+  if (!result.ok) console.error('[intelligence] save failed', result.error)
+  return result.ok
 }
 
 export function loadIntelligence() {

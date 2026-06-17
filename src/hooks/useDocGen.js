@@ -53,6 +53,12 @@ import {
 } from '../utils/variationToDocGen.js'
 import { createEmptyVariationItem, normalizeVariationItem } from '../utils/variationOrderTypes.js'
 import { applyCalculationsToOrder } from '../utils/variationCalculations.js'
+import {
+  coerceFieldValue,
+  sanitizePatch,
+  safeJsonClone,
+  isDomOrEvent,
+} from '../utils/safeSerialize.js'
 
 const DEFAULT_META = {
   quoteNum: 'DLC-2025-001',
@@ -93,8 +99,11 @@ export function useDocGen(estimatePreferences = null) {
   const hydrated = useRef(false)
   const skipPersist = useRef(false)
 
-  const setMeta = useCallback((key, val) =>
-    setMetaRaw(m => ({ ...m, [key]: val })), [])
+  const setMeta = useCallback((key, val) => {
+    const safeVal = coerceFieldValue(val)
+    if (safeVal === undefined) return
+    setMetaRaw(m => ({ ...m, [key]: safeVal }))
+  }, [])
 
   const setPaymentTerms = useCallback((next) => {
     setMetaRaw(m => ({
@@ -164,43 +173,52 @@ export function useDocGen(estimatePreferences = null) {
     }
   }, [])
 
-  const updateMat = useCallback((id, field, val) =>
+  const updateMat = useCallback((id, field, val) => {
+    const safeVal = coerceFieldValue(val)
+    if (safeVal === undefined) return
     setMats(prev => prev.map(r => {
       if (r.id !== id) return r
-      const u = { ...r, [field]: val }
+      const u = { ...r, [field]: safeVal }
       if ((field === 'qty' || field === 'rate') && !u.clientSupply) {
         const q = parseFloat(u.qty) || 0
         const rt = parseFloat(u.rate) || 0
         u.amount = (q && rt) ? String(q * rt) : ''
       }
-      if (field === 'clientSupply' && val) u.amount = ''
+      if (field === 'clientSupply' && safeVal) u.amount = ''
       return u
-    })), [])
+    }))
+  }, [])
 
-  const updateBoqRow = useCallback((id, field, val) =>
+  const updateBoqRow = useCallback((id, field, val) => {
+    const safeVal = coerceFieldValue(val)
+    if (safeVal === undefined) return
     setBoqRows(prev => prev.map(r => {
       if (r.id !== id || r.locked) return r
-      const u = { ...r, [field]: val }
+      const u = { ...r, [field]: safeVal }
       if ((field === 'qty' || field === 'rate') && !u.clientSupplied) {
         const q = parseFloat(u.qty) || 0
         const rt = parseFloat(u.rate) || 0
         u.amount = (q && rt) ? (q * rt) : ''
       }
-      if (field === 'clientSupplied' && val) u.rate = '0'
+      if (field === 'clientSupplied' && safeVal) u.rate = '0'
       return u
-    })), [])
+    }))
+  }, [])
 
-  const updateLabor = useCallback((id, field, val) =>
+  const updateLabor = useCallback((id, field, val) => {
+    const safeVal = coerceFieldValue(val)
+    if (safeVal === undefined) return
     setLabor(prev => prev.map(r => {
       if (r.id !== id) return r
-      const u = { ...r, [field]: val }
+      const u = { ...r, [field]: safeVal }
       if (field === 'qty' || field === 'rate') {
         const q = parseFloat(u.qty) || 0
         const rt = parseFloat(u.rate) || 0
         u.amount = (q && rt) ? String(q * rt) : ''
       }
       return u
-    })), [])
+    }))
+  }, [])
 
   const setMaterialState = useCallback((categories, materials) => {
     const normalized = normalizeMaterialState(materials, categories)
@@ -262,7 +280,11 @@ export function useDocGen(estimatePreferences = null) {
   const addLabor    = useCallback(() => setLabor(p => [...p, { id: Date.now(), trade: '', desc: '', unit: 'days', qty: '', rate: '', amount: '' }]), [])
   const removeLabor = useCallback((id) => setLabor(p => p.filter(r => r.id !== id)), [])
 
-  const updatePrelim  = useCallback((id, field, val) => setPrelims(p => p.map(r => r.id === id && !r.locked ? { ...r, [field]: val } : r)), [])
+  const updatePrelim = useCallback((id, field, val) => {
+    const safeVal = coerceFieldValue(val)
+    if (safeVal === undefined) return
+    setPrelims(p => p.map(r => r.id === id && !r.locked ? { ...r, [field]: safeVal } : r))
+  }, [])
   const addPrelim     = useCallback(() => setPrelims(p => [...p, { id: Date.now(), item: '', amount: '' }]), [])
   const removePrelim  = useCallback((id) => setPrelims(p => p.filter(r => r.id !== id || r.locked)), [])
 
@@ -411,7 +433,7 @@ export function useDocGen(estimatePreferences = null) {
       originalDocumentId: originalDocumentId || activeSavedDocId,
       originalSnapshot: snap,
       originalTotal: snap.contractSum || contractSum || 0,
-      originalBoqSnapshot: JSON.parse(JSON.stringify(snap.boqRows || boqRows)),
+      originalBoqSnapshot: safeJsonClone(snap.boqRows || boqRows) || [],
       revisionNumber,
       variationOrderId: variationOrder?.id || null,
       variationNumber: variationOrder?.variationNumber || '',
@@ -426,7 +448,7 @@ export function useDocGen(estimatePreferences = null) {
   const pushVariationUndo = useCallback(() => {
     setVariationUndoStack(stack => {
       if (!variationDraft) return stack
-      return [...stack.slice(-20), JSON.parse(JSON.stringify(variationDraft))]
+      return [...stack.slice(-20), safeJsonClone(variationDraft)].filter(Boolean)
     })
   }, [variationDraft])
 
@@ -441,25 +463,28 @@ export function useDocGen(estimatePreferences = null) {
   }, [])
 
   const updateVariationItem = useCallback((id, patch) => {
+    if (isDomOrEvent(patch)) return
+    const safePatch = sanitizePatch(patch)
     pushVariationUndo()
     setVariationDraft(draft => {
       if (!draft) return draft
       const items = (draft.items || []).map(item =>
-        item.id === id ? normalizeVariationItemForDocGen({ ...item, ...patch }) : item,
+        item.id === id ? normalizeVariationItemForDocGen({ ...item, ...safePatch }) : item,
       )
       return { ...draft, items }
     })
   }, [pushVariationUndo, setVariationDraft])
 
   const addVariationItem = useCallback((partial = {}) => {
+    const safePartial = isDomOrEvent(partial) ? {} : sanitizePatch(partial)
     pushVariationUndo()
     setVariationDraft(draft => {
       if (!draft) return draft
       const items = [...(draft.items || []), normalizeVariationItemForDocGen(
         createEmptyVariationItem((draft.items?.length || 0) + 1),
       )]
-      if (partial && Object.keys(partial).length) {
-        items[items.length - 1] = normalizeVariationItemForDocGen({ ...items[items.length - 1], ...partial })
+      if (Object.keys(safePartial).length) {
+        items[items.length - 1] = normalizeVariationItemForDocGen({ ...items[items.length - 1], ...safePartial })
       }
       return { ...draft, items }
     })
@@ -562,7 +587,8 @@ export function useDocGen(estimatePreferences = null) {
   }, [setVariationDraft])
 
   const updateVariationDraftMeta = useCallback((patch) => {
-    setVariationDraft(draft => (draft ? { ...draft, ...patch } : draft))
+    const safePatch = sanitizePatch(patch)
+    setVariationDraft(draft => (draft ? { ...draft, ...safePatch } : draft))
   }, [setVariationDraft])
 
   const getDocumentSnapshot = useCallback((previewHtml = null) => ({

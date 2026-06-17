@@ -2,12 +2,13 @@
 
 import { VO_STORAGE_KEY, createVariationOrder } from './variationOrderTypes.js'
 import { applyCalculationsToOrder } from './variationCalculations.js'
+import { safeLocalStorageSetItem, safeParseJson } from './safeSerialize.js'
 
 export function loadVariationOrders() {
   try {
     const raw = localStorage.getItem(VO_STORAGE_KEY)
     if (!raw) return []
-    const parsed = JSON.parse(raw)
+    const parsed = safeParseJson(raw, [])
     return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
@@ -15,13 +16,12 @@ export function loadVariationOrders() {
 }
 
 export function persistVariationOrders(orders) {
-  try {
-    localStorage.setItem(VO_STORAGE_KEY, JSON.stringify(orders))
-    return true
-  } catch (e) {
-    console.error('[variationOrders] persist failed', e)
+  const result = safeLocalStorageSetItem(VO_STORAGE_KEY, orders)
+  if (!result.ok) {
+    console.error('[variationOrders] persist failed', result.error)
     return false
   }
+  return true
 }
 
 export function saveVariationOrder(vo) {

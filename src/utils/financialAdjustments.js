@@ -3,6 +3,8 @@
  * Nothing is calculated until the user enables an item.
  */
 
+import { safeLocalStorageSetItem, safeParseJson } from './safeSerialize.js'
+
 export const FINANCIAL_ITEM_ORDER = ['contingency', 'overheads', 'profit', 'vat', 'discount']
 
 export const FINANCIAL_ITEM_META = {
@@ -52,25 +54,23 @@ export function loadFinancialAdjustments() {
 }
 
 export function persistFinancialAdjustments(adjustments) {
-  try {
-    localStorage.setItem(STORAGE_KEY_ADJ, JSON.stringify(adjustments))
-  } catch { /* ignore */ }
+  const result = safeLocalStorageSetItem(STORAGE_KEY_ADJ, adjustments)
+  if (!result.ok) console.warn('[financialAdjustments] persist failed', result.error)
 }
 
 export function loadEstimatePreferences() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_PREF)
     if (!raw) return { ...DEFAULT_ESTIMATE_PREFERENCES }
-    return { ...DEFAULT_ESTIMATE_PREFERENCES, ...JSON.parse(raw) }
+    return { ...DEFAULT_ESTIMATE_PREFERENCES, ...safeParseJson(raw, {}) }
   } catch {
     return { ...DEFAULT_ESTIMATE_PREFERENCES }
   }
 }
 
 export function persistEstimatePreferences(prefs) {
-  try {
-    localStorage.setItem(STORAGE_KEY_PREF, JSON.stringify(prefs))
-  } catch { /* ignore */ }
+  const result = safeLocalStorageSetItem(STORAGE_KEY_PREF, prefs)
+  if (!result.ok) console.warn('[estimatePreferences] persist failed', result.error)
 }
 
 function resolveItemAmount(item, runningTotal, projectSubtotal) {

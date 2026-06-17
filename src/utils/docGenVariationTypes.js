@@ -1,4 +1,4 @@
-/** Document Generator × Variation Order integration types. */
+import { safeLocalStorageSetItem, safeParseJson, sanitizeSerializableState } from './safeSerialize.js'
 
 export const REVISED_EXPORT_STYLES = {
   PREMIUM: 'revised_premium',
@@ -33,22 +33,18 @@ export function formatRevisionLabel(n) {
 }
 
 export function saveVariationDraft(draft) {
-  try {
-    localStorage.setItem(DOCGEN_VARIATION_DRAFT_KEY, JSON.stringify({
-      ...draft,
-      savedAt: new Date().toISOString(),
-    }))
-    return true
-  } catch (e) {
-    console.error('[docGenVariation] save draft failed', e)
-    return false
-  }
+  const result = safeLocalStorageSetItem(DOCGEN_VARIATION_DRAFT_KEY, {
+    ...sanitizeSerializableState(draft),
+    savedAt: new Date().toISOString(),
+  })
+  if (!result.ok) console.error('[docGenVariation] save draft failed', result.error)
+  return result.ok
 }
 
 export function loadVariationDraft() {
   try {
     const raw = localStorage.getItem(DOCGEN_VARIATION_DRAFT_KEY)
-    return raw ? JSON.parse(raw) : null
+    return safeParseJson(raw, null)
   } catch {
     return null
   }

@@ -3,6 +3,7 @@ import {
   buildWorkspaceSnapshot,
   saveWorkspaceSnapshot,
   loadWorkspaceSnapshot,
+  loadValidWorkspaceSnapshot,
   applyWorkspaceSnapshotToStorage,
   clearBrokenWorkspaceData,
 } from '../utils/workspaceSession.js'
@@ -37,16 +38,19 @@ export function useWorkspaceSession({
       estimatePreferences,
       priceProfileActiveId,
     })
-    saveWorkspaceSnapshot(snapshot)
+    const result = saveWorkspaceSnapshot(snapshot)
     saveChatSession(chatMsgs)
+    if (!result.ok) {
+      toast?.warn?.('Auto-save skipped', result.error || 'Session contains invalid data and was not saved')
+    }
     return snapshot
   }, [
     tab, chatMsgs, intelligenceData, workflowState, extractedPrices,
-    activeProjectId, estimatePreferences, priceProfileActiveId,
+    activeProjectId, estimatePreferences, priceProfileActiveId, toast,
   ])
 
   const restoreLastSession = useCallback((options = {}) => {
-    const snap = loadWorkspaceSnapshot()
+    const snap = loadValidWorkspaceSnapshot() || loadWorkspaceSnapshot()
     if (!snap) {
       toast?.warn?.('Nothing to restore', 'No saved workspace snapshot found')
       logSessionDebug('restore-skipped', { reason: 'no-snapshot' })
@@ -90,7 +94,7 @@ export function useWorkspaceSession({
     if (bootRestored.current) return
     bootRestored.current = true
 
-    const snap = loadWorkspaceSnapshot()
+    const snap = loadValidWorkspaceSnapshot() || loadWorkspaceSnapshot()
     if (!snap) return
 
     const hasSnapChat = Array.isArray(snap.chat) && snap.chat.length > 0
