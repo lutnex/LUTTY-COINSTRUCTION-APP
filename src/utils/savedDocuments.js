@@ -82,3 +82,66 @@ export function duplicateSavedDocument(id) {
 export function getSavedDocument(id) {
   return loadSavedDocuments().find(d => d.id === id) || null
 }
+
+export function getRevisionsForDocument(parentDocumentId) {
+  if (!parentDocumentId) return []
+  return loadSavedDocuments()
+    .filter(d => d.parentDocumentId === parentDocumentId)
+    .sort((a, b) => (a.revisionNumber || 0) - (b.revisionNumber || 0))
+}
+
+export function nextRevisionForDocument(parentDocumentId) {
+  const revs = getRevisionsForDocument(parentDocumentId)
+  const max = revs.reduce((m, r) => Math.max(m, parseInt(r.revisionNumber, 10) || 0), 0)
+  return max + 1
+}
+
+/** Save a revised document — never overwrites the original issued estimate. */
+export function createRevisedDocument({
+  parentDocument,
+  revisionNumber,
+  variationOrderId = null,
+  variationNumber = '',
+  snapshot,
+  name,
+}) {
+  const now = new Date().toISOString()
+  const parent = parentDocument || {}
+  const rev = revisionNumber || 1
+  const revisedTotal = snapshot?.revision?.calculations?.revisedTotal
+    ?? snapshot?.variationSummary?.revisedTotal
+    ?? snapshot?.contractSum
+    ?? 0
+
+  return {
+    id: `doc-${Date.now()}-r${rev}`,
+    name: (name || `${parent.name || 'Document'} — Revision ${rev}`).trim(),
+    projectName: parent.projectName || snapshot?.meta?.projectTitle || '',
+    category: parent.category || snapshot?.docType || 'estimate',
+    createdAt: now,
+    updatedAt: now,
+    contractSum: revisedTotal,
+    previewHtml: snapshot?.previewHtml || null,
+    parentDocumentId: parent.id || snapshot?.revision?.originalDocumentId || null,
+    revisionNumber: rev,
+    variationOrderId,
+    variationNumber,
+    isRevision: true,
+    originalDocumentId: parent.id || snapshot?.revision?.originalDocumentId || null,
+    originalTotal: snapshot?.revision?.originalTotal ?? parent.contractSum ?? 0,
+    snapshot: {
+      ...snapshot,
+      version: 2,
+      revision: snapshot?.revision || {
+        revisionNumber: rev,
+        variationOrderId,
+        variationNumber,
+        originalDocumentId: parent.id || null,
+        originalTotal: parent.contractSum ?? 0,
+        calculations: snapshot?.variationSummary || null,
+        items: snapshot?.variations || [],
+        status: 'saved',
+      },
+    },
+  }
+}

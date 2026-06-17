@@ -95,8 +95,10 @@ import {
   CLOUD_WARNING,
 } from './services/savedDocumentsService.js'
 import { fetchCloudDocuments } from './services/supabase/savedDocumentsCloud.js'
-import { loadSavedDocuments } from './utils/savedDocuments.js'
+import { loadSavedDocuments, createRevisedDocument, nextRevisionForDocument, getSavedDocument } from './utils/savedDocuments.js'
 import { useCloudSave } from './hooks/useCloudSave.js'
+import { VO_SOURCE_TYPES } from './utils/variationOrderTypes.js'
+import { applyCalculationsToOrder } from './utils/variationCalculations.js'
 import {
   loadAllVariationOrders,
   saveVariationOrderUnified,
@@ -1095,6 +1097,199 @@ function AppShellInner({ projState, dispatch }) {
     }
   }, [docGen, buildExportData, companyLogo, refreshSavedDocuments, toast])
 
+  const handleApplyVariationFromOrder = useCallback((vo) => {
+    const draft = docGen.loadVariationFromOrder(vo)
+    if (draft) {
+      toast.success('Variation loaded', `${vo.variationNumber} — ${draft.items?.length || 0} items`)
+    } else {
+      toast.error('Load failed', 'Could not apply this variation order')
+    }
+  }, [docGen, toast])
+
+  const handleCreateVariationFromDocument = useCallback(async () => {
+    const snapshot = docGen.getDocumentSnapshot()
+    const parentId = docGen.activeSavedDocId
+    const vo = createNewVariationOrder({
+      originalEstimateId: parentId || '',
+      originalEstimateRef: snapshot.meta?.quoteNum || '',
+      originalEstimateTotal: docGen.totals.grand,
+      originalBoqSnapshot: JSON.parse(JSON.stringify(snapshot.boqRows || [])),
+      projectName: snapshot.meta?.projectTitle || '',
+      clientName: snapshot.meta?.clientName || '',
+      projectLocation: snapshot.meta?.projectLocation || '',
+      clientContact: snapshot.meta?.clientContact || '',
+      clientEmail: snapshot.meta?.clientEmail || '',
+      sourceType: VO_SOURCE_TYPES.ESTIMATE,
+    }, variationOrders)
+    const result = await saveVariationOrderUnified(vo)
+    if (result.ok) {
+      await refreshVariationOrders()
+      docGen.loadVariationFromOrder(result.order)
+      toast.success('Variation order created', result.order?.variationNumber)
+    } else {
+      toast.error('Create failed', result.error || 'Could not create variation order')
+    }
+  }, [docGen, variationOrders, refreshVariationOrders, toast])
+
+  const handleImportVariationFromChat = useCallback(() => {
+    const fromChat = chat.msgs.slice().reverse().find(m => m.role === 'assistant' && m.extract?.variationItems?.length)?.extract
+    const extract = fromChat || (intelligence.data?.variationItems?.length ? { variationItems: intelligence.data.variationItems } : null)
+    if (!extract?.variationItems?.length) {
+      toast.warn('No variation items', 'Ask AI to build a variation schedule in chat first')
+      return false
+    }
+    const ok = docGen.importVariationFromExtract(extract)
+    if (ok) {
+      toast.success('Imported from chat', `${extract.variationItems.length} variation items`)
+    }
+    return ok
+  }, [chat.msgs, docGen, intelligence.data, toast])
+
+  const handleFinalizeVariation = useCallback((exportStyle) => {
+    if (!docGen.variationDraft?.items?.length) {
+      toast.warn('No variation items', 'Add at least one variation line')
+      return
+    }
+    const payload = docGen.finalizeVariationToDocument(exportStyle)
+    if (!payload) {
+      toast.error('Apply failed', 'Could not finalize variation')
+      return
+    }
+    try {
+      const data = { ...buildExportData(), ...payload, type: payload.docType }
+      docGen.setPreview(buildDocumentHTML(data, companyLogo.getExportLogo()))
+    } catch { /* preview optional */ }
+    toast.success(
+      'Variation applied',
+      `Revised total: GHS ${Number(payload.variationSummary?.revisedTotal || 0).toLocaleString('en')}`,
+    )
+  }, [docGen, buildExportData, companyLogo, toast])
+
+  const handleSaveRevisedDocument = useCallback(async (fields = {}) => {
+    const vd = docGen.variationDraft
+    if (!vd || vd.status !== 'finalized') {
+      toast.warn('Not finalized', 'Preview and approve the variation before saving')
+      return
+    }
+    const parent = docGen.activeSavedDocId ? getSavedDocument(docGen.activeSavedDocId) : null
+    const previewPayload = docGen.buildVariationPreviewPayload(vd.exportStyle)
+    if (!previewPayload) {
+      toast.error('Save failed', 'Could not build revised document')
+      return
+    }
+    let previewHtml = docGen.preview
+    if (!previewHtml) {
+      try {
+        const data = { ...buildExportData(), ...previewPayload, type: previewPayload.docType }
+        previewHtml = buildDocumentHTML(data, companyLogo.getExportLogo())
+      } catch { /* optional */ }
+    }
+    const revNum = fields.asNewRevision
+      ? nextRevisionForDocument(parent?.id || vd.originalDocumentId)
+      : (vd.revisionNumber || 1)
+    const snapshot = {
+      ...previewPayload,
+      previewHtml,
+      contractSum: previewPayload.variationSummary?.revisedTotal ?? docGen.totals.grand,
+    }
+    const doc = createRevisedDocument({
+      parentDocument: parent || {
+        id: vd.originalDocumentId,
+        name: fields.name || docGen.meta.projectTitle,
+        projectName: fields.projectName || docGen.meta.projectTitle,
+        category: docGen.docType,
+        contractSum: vd.originalTotal,
+      },
+      revisionNumber: revNum,
+      variationOrderId: vd.variationOrderId,
+      variationNumber: vd.variationNumber,
+      snapshot,
+      name: fields.name,
+    })
+    const result = await saveDocumentUnified(doc)
+    if (result.ok) {
+      docGen.setActiveSavedDocId(doc.id)
+      docGen.updateVariationDraftMeta({ revisionNumber: revNum, status: 'saved' })
+      await refreshSavedDocuments()
+      toast.success('Revised document saved', doc.name, {
+        label: 'View saved', fn: () => setTab('documents'),
+      })
+    } else {
+      toast.error('Save failed', result.error || 'Could not save revised document')
+    }
+  }, [docGen, buildExportData, companyLogo, refreshSavedDocuments, toast])
+
+  const handleDownloadRevisedPdf = useCallback(async () => {
+    const vd = docGen.variationDraft
+    if (!vd || vd.status !== 'finalized') {
+      toast.warn('Not finalized', 'Finalize the variation before downloading')
+      return
+    }
+    const tid = toast.loading('Generating revised PDF…')
+    setPdfStatus('Preparing revised document…')
+    try {
+      const payload = docGen.buildVariationPreviewPayload(vd.exportStyle)
+      const data = { ...buildExportData(), ...payload, type: payload?.docType || docGen.docType }
+      const ref = docGen.meta.quoteNum || 'revised-document'
+      const result = await downloadPDF(
+        data,
+        `${ref}-rev${vd.revisionNumber || 1}.pdf`,
+        s => { setPdfStatus(s); toast.update(tid, { body: s }) },
+        data.logoUrl,
+      )
+      if (result.method === 'pdf') {
+        toast.done(tid, 'Revised PDF downloaded')
+      } else {
+        toast.done(tid, 'Document saved', result.message)
+      }
+    } catch (e) {
+      toast.fail(tid, 'Export failed', e.message || 'Try Preview then Print')
+    }
+    setPdfStatus(null)
+  }, [docGen, buildExportData, toast])
+
+  const handleSaveVariationSeparately = useCallback(async () => {
+    const vd = docGen.variationDraft
+    if (!vd?.items?.length) {
+      toast.warn('No items', 'Add variation items first')
+      return
+    }
+    const snapshot = docGen.getDocumentSnapshot()
+    let vo = vd.variationOrderId
+      ? variationOrders.find(v => v.id === vd.variationOrderId)
+      : null
+    if (!vo) {
+      vo = createNewVariationOrder({
+        originalEstimateId: docGen.activeSavedDocId || vd.originalDocumentId || '',
+        originalEstimateRef: snapshot.meta?.quoteNum || '',
+        originalEstimateTotal: vd.originalTotal || docGen.totals.grand,
+        originalBoqSnapshot: vd.originalBoqSnapshot || snapshot.boqRows || [],
+        projectName: snapshot.meta?.projectTitle || '',
+        clientName: snapshot.meta?.clientName || '',
+        items: vd.items,
+        reasonForVariation: vd.userNotes || 'Applied from Document Generator',
+        sourceType: VO_SOURCE_TYPES.ESTIMATE,
+      }, variationOrders)
+    } else {
+      vo = applyCalculationsToOrder({
+        ...vo,
+        items: vd.items,
+        reasonForVariation: vd.userNotes || vo.reasonForVariation,
+        revisedTotal: docGen.variationCalculations?.revisedTotal ?? vo.revisedTotal,
+      })
+    }
+    const result = await saveVariationOrderUnified(vo)
+    if (result.ok) {
+      await refreshVariationOrders()
+      docGen.updateVariationDraftMeta({ variationOrderId: result.order?.id, variationNumber: result.order?.variationNumber })
+      toast.success('Variation saved', result.order?.variationNumber, {
+        label: 'Open VO module', fn: () => setTab('variation'),
+      })
+    } else {
+      toast.error('Save failed', result.error)
+    }
+  }, [docGen, variationOrders, refreshVariationOrders, toast])
+
   const handleOpenSavedDocument = useCallback((doc) => {
     const ok = docGen.loadDocumentSnapshot(doc.snapshot, doc.id)
     if (ok) {
@@ -1317,6 +1512,14 @@ function AppShellInner({ projState, dispatch }) {
             activeProjName={projState.projects.find(p => p.id === projState.activeId)?.name}
             companyLogo={companyLogo}
             aiBusy={chat.busy}
+            variationOrders={variationOrders}
+            onApplyVariationFromOrder={handleApplyVariationFromOrder}
+            onCreateVariationFromDocument={handleCreateVariationFromDocument}
+            onImportVariationFromChat={handleImportVariationFromChat}
+            onSaveRevisedDocument={handleSaveRevisedDocument}
+            onDownloadRevisedPdf={handleDownloadRevisedPdf}
+            onSaveVariationSeparately={handleSaveVariationSeparately}
+            onFinalizeVariation={handleFinalizeVariation}
           />
         )}
 

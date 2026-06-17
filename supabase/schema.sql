@@ -163,3 +163,33 @@ DROP POLICY IF EXISTS "Allow public update variation_orders" ON variation_orders
 CREATE POLICY "Allow public update variation_orders" ON variation_orders FOR UPDATE USING (true);
 DROP POLICY IF EXISTS "Allow public delete variation_orders" ON variation_orders;
 CREATE POLICY "Allow public delete variation_orders" ON variation_orders FOR DELETE USING (true);
+
+-- Revised documents (links to original — never overwrites issued estimates)
+CREATE TABLE IF NOT EXISTS revised_documents (
+  id TEXT PRIMARY KEY,
+  parent_document_id TEXT NOT NULL,
+  revision_number INTEGER NOT NULL DEFAULT 1,
+  variation_order_id TEXT DEFAULT '',
+  variation_number TEXT DEFAULT '',
+  original_total NUMERIC DEFAULT 0,
+  revised_total NUMERIC DEFAULT 0,
+  status TEXT DEFAULT 'draft',
+  user_notes TEXT DEFAULT '',
+  snapshot JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS revised_documents_parent_idx ON revised_documents (parent_document_id);
+CREATE INDEX IF NOT EXISTS revised_documents_updated_at_idx ON revised_documents (updated_at DESC);
+
+ALTER TABLE revised_documents ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public read revised_documents" ON revised_documents;
+CREATE POLICY "Allow public read revised_documents" ON revised_documents FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Allow public insert revised_documents" ON revised_documents;
+CREATE POLICY "Allow public insert revised_documents" ON revised_documents FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow public update revised_documents" ON revised_documents;
+CREATE POLICY "Allow public update revised_documents" ON revised_documents FOR UPDATE USING (true);
+DROP POLICY IF EXISTS "Allow public delete revised_documents" ON revised_documents;
+CREATE POLICY "Allow public delete revised_documents" ON revised_documents FOR DELETE USING (true);

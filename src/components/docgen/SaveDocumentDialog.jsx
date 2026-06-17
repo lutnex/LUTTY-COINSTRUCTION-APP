@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { C } from '../../utils/constants.js'
 import { DOCUMENT_CATEGORIES } from '../../utils/savedDocuments.js'
 
-export default function SaveDocumentDialog({ open, defaultName, defaultProject, defaultCategory, onSave, onCancel }) {
+export default function SaveDocumentDialog({ open, defaultName, defaultProject, defaultCategory, title, onSave, onCancel }) {
   const [name, setName] = useState('')
   const [projectName, setProjectName] = useState('')
   const [category, setCategory] = useState('estimate')
@@ -31,7 +31,7 @@ export default function SaveDocumentDialog({ open, defaultName, defaultProject, 
         background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12,
         padding: 24, minWidth: 360, maxWidth: 440, boxShadow: '0 16px 48px rgba(0,0,0,.5)',
       }}>
-        <div style={{ fontFamily: "'Bebas Neue'", fontSize: 20, letterSpacing: 1.5, color: C.amber, marginBottom: 16 }}>SAVE DOCUMENT</div>
+        <div style={{ fontFamily: "'Bebas Neue'", fontSize: 20, letterSpacing: 1.5, color: C.amber, marginBottom: 16 }}>{title || 'SAVE DOCUMENT'}</div>
 
         <Field label="Document Name">
           <input value={name} onChange={e => setName(e.target.value)} style={inputStyle} required autoFocus placeholder="e.g. Joy City Pool Estimate" />

@@ -9,14 +9,33 @@ import SaveDocumentDialog from './SaveDocumentDialog.jsx'
 import DocumentSectionBlock from './DocumentSectionBlock.jsx'
 import SectionManager from './SectionManager.jsx'
 import { createSection } from '../../utils/documentSections.js'
+import { ApplyVariationDialog } from './ApplyVariationDialog.jsx'
+import { DocGenVariationPanel } from './DocGenVariationPanel.jsx'
+import { VariationPreviewDialog } from './VariationPreviewDialog.jsx'
+import { VariationExportStyleDialog } from './VariationExportStyleDialog.jsx'
+import { formatRevisionLabel, nextRevisionNumber } from '../../utils/docGenVariationTypes.js'
+import { nextRevisionForDocument } from '../../utils/savedDocuments.js'
 
 export default function DocGenPage({
   docGen, onDownload, onPrint, onPreview, onSaveDocument, onClearForm, onStartNewDocument,
   onAIFill, pdfStatus, activeProjName, companyLogo, aiBusy, toast,
+  variationOrders = [],
+  onApplyVariationFromOrder,
+  onCreateVariationFromDocument,
+  onImportVariationFromChat,
+  onSaveRevisedDocument,
+  onDownloadRevisedPdf,
+  onSaveVariationSeparately,
+  onFinalizeVariation,
 }) {
   const [clearConfirm, setClearConfirm] = useState(null)
   const [saveOpen, setSaveOpen] = useState(false)
+  const [saveRevisionOpen, setSaveRevisionOpen] = useState(false)
   const [sectionManagerOpen, setSectionManagerOpen] = useState(false)
+  const [applyVariationOpen, setApplyVariationOpen] = useState(false)
+  const [previewVariationOpen, setPreviewVariationOpen] = useState(false)
+  const [exportStyleOpen, setExportStyleOpen] = useState(false)
+  const [discardVariationConfirm, setDiscardVariationConfirm] = useState(false)
   const {
     docType, setDocType, meta, setMeta,
     paymentTerms, setPaymentTerms,
@@ -30,6 +49,10 @@ export default function DocGenPage({
     transferSource, hasBOQData,
     financialAdjustments, setFinancialAdjustments,
     lastAutoSaved, activeSavedDocId,
+    variationDraft, variationCalculations, hasVariationDraft,
+    startVariationDraft, addVariationItem, updateVariationItem, removeVariationItem,
+    undoVariationDraft, canUndoVariation, updateVariationDraftMeta,
+    buildVariationPreviewPayload, clearVariationWorkflow,
   } = docGen
 
   const adjustmentLines = pricing?.adjustmentResult?.enabledLines || []
@@ -207,6 +230,11 @@ export default function DocGenPage({
 
   const showBOQ = docType === 'boq' || boqRows.length > 0
   const isEmpty = !hasBOQData && !meta.projectTitle?.trim()
+  const canApplyVariation = hasBOQData || Boolean(activeSavedDocId)
+  const activeDocName = meta.projectTitle || activeProjName || ''
+  const previewPayload = previewVariationOpen || exportStyleOpen
+    ? buildVariationPreviewPayload?.(variationDraft?.exportStyle)
+    : null
   const logoInputRef = useRef(null)
 
   const handleLogoUpload = async (e) => {
@@ -277,15 +305,31 @@ export default function DocGenPage({
           <div style={{ fontSize: 11, color: C.textFaint, fontFamily: "'IBM Plex Mono'", marginBottom: 10 }}>
             Draft auto-saved {new Date(lastAutoSaved).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
             {activeSavedDocId && <span style={{ color: C.green, marginLeft: 8 }}>· linked to saved document</span>}
+            {hasVariationDraft && <span style={{ color: C.amber, marginLeft: 8 }}>· variation draft in progress</span>}
+          </div>
+        )}
+
+        {hasVariationDraft && variationDraft?.status === 'finalized' && (
+          <div style={{ background: 'rgba(52,211,153,.07)', border: '1px solid rgba(52,211,153,.35)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: C.green, marginBottom: 14 }}>
+            ✓ Variation applied — {formatRevisionLabel(variationDraft.revisionNumber)}
+            {variationDraft.variationNumber ? ` (${variationDraft.variationNumber})` : ''}. Save or download the revised document below.
           </div>
         )}
 
         {/* Action buttons */}
-        <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
           <button onClick={onDownload} disabled={isEmpty} style={{ ...btn('primary'), opacity: isEmpty ? .5 : 1 }}>⬇ Download PDF</button>
           <button onClick={onPrint} disabled={isEmpty} style={{ ...btn('sky'), opacity: isEmpty ? .5 : 1 }}>🖨️ Print</button>
           <button onClick={onPreview} disabled={isEmpty} style={{ ...btn('green'), opacity: isEmpty ? .5 : 1 }}>👁 Preview</button>
           <button onClick={() => setSaveOpen(true)} disabled={isEmpty} style={{ ...btn('outline'), opacity: isEmpty ? .5 : 1 }}>💾 Save Document</button>
+          <button
+            onClick={() => setApplyVariationOpen(true)}
+            disabled={!canApplyVariation}
+            style={{ ...btn('amber'), opacity: !canApplyVariation ? .5 : 1 }}
+            title={!canApplyVariation ? 'Open or create a document first' : 'Apply variation to this document'}
+          >
+            ± Apply Variation
+          </button>
           <button onClick={() => setSectionManagerOpen(true)} style={btn('outline')}>Manage Sections</button>
           <button onClick={() => setClearConfirm('clear')} style={btn('outline')}>Clear Form</button>
           <button onClick={() => setClearConfirm('new')} style={btn('outline')}>Start New Document</button>
@@ -293,6 +337,38 @@ export default function DocGenPage({
             {aiBusy ? '⏳ AI working…' : '🤖 AI Auto-Fill'}
           </button>
         </div>
+
+        {hasVariationDraft && variationDraft?.status === 'finalized' && (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+            <button onClick={() => setSaveRevisionOpen(true)} style={btn('primary')}>💾 Save Revised Document</button>
+            <button onClick={() => onSaveRevisedDocument?.({ asNewRevision: true })} style={btn('outline')}>Save as New Revision</button>
+            <button onClick={onDownloadRevisedPdf} style={btn('sky')}>⬇ Download Revised PDF</button>
+            <button onClick={onDownload} style={btn('outline')}>Export Revised PDF</button>
+            <button onClick={onSaveVariationSeparately} style={btn('outline')}>Save Variation Separately</button>
+            <button onClick={() => setExportStyleOpen(true)} style={btn('green')}>Change Export Style</button>
+          </div>
+        )}
+
+        {hasVariationDraft && variationDraft?.status !== 'finalized' && (
+          <DocGenVariationPanel
+            variationDraft={variationDraft}
+            calculations={variationCalculations}
+            onAddItem={addVariationItem}
+            onUpdateItem={updateVariationItem}
+            onRemoveItem={removeVariationItem}
+            onUndo={undoVariationDraft}
+            canUndo={canUndoVariation}
+            onUpdateNotes={notes => updateVariationDraftMeta({ userNotes: notes })}
+            onPreview={() => {
+              if (!variationDraft?.items?.length) {
+                toast?.warn?.('No items', 'Add at least one variation line before preview')
+                return
+              }
+              setPreviewVariationOpen(true)
+            }}
+            onClear={() => setDiscardVariationConfirm(true)}
+          />
+        )}
 
         {pdfStatus && (
           <div style={{ background: C.amberGlow, border: `1px solid ${C.amberLo}`, borderRadius: 8, padding: '10px 14px', fontSize: 12, color: C.amber, fontFamily: "'IBM Plex Mono'", marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -373,6 +449,84 @@ export default function DocGenPage({
         }}
         onCancel={() => setSaveOpen(false)}
       />
+
+      <SaveDocumentDialog
+        open={saveRevisionOpen}
+        defaultName={`${meta.projectTitle || activeDocName || 'Document'} — Revision ${variationDraft?.revisionNumber || 1}`}
+        defaultProject={meta.projectTitle || activeProjName || ''}
+        defaultCategory={docType === 'boq' ? 'boq' : 'quotation'}
+        title="Save Revised Document"
+        onSave={(fields) => {
+          onSaveRevisedDocument?.(fields)
+          setSaveRevisionOpen(false)
+        }}
+        onCancel={() => setSaveRevisionOpen(false)}
+      />
+
+      <ApplyVariationDialog
+        open={applyVariationOpen}
+        onClose={() => setApplyVariationOpen(false)}
+        variationOrders={variationOrders}
+        activeSavedDocId={activeSavedDocId}
+        activeDocName={activeDocName}
+        onStartManual={() => {
+          const rev = activeSavedDocId
+            ? nextRevisionForDocument(activeSavedDocId)
+            : nextRevisionNumber([variationDraft?.revisionNumber].filter(Boolean))
+          startVariationDraft({ revisionNumber: rev })
+          setApplyVariationOpen(false)
+          toast?.success?.('Variation started', 'Add variation lines in the schedule below')
+        }}
+        onSelectOrder={(vo) => {
+          onApplyVariationFromOrder?.(vo)
+          setApplyVariationOpen(false)
+        }}
+        onCreateNewOrder={() => {
+          onCreateVariationFromDocument?.()
+          setApplyVariationOpen(false)
+        }}
+        onImportFromChat={() => {
+          const ok = onImportVariationFromChat?.()
+          if (ok !== false) setApplyVariationOpen(false)
+        }}
+      />
+
+      <VariationPreviewDialog
+        open={previewVariationOpen}
+        onClose={() => setPreviewVariationOpen(false)}
+        calculations={variationCalculations}
+        variationDraft={variationDraft}
+        previewPayload={previewPayload}
+        onApprove={() => {
+          setPreviewVariationOpen(false)
+          setExportStyleOpen(true)
+        }}
+      />
+
+      <VariationExportStyleDialog
+        open={exportStyleOpen}
+        onClose={() => setExportStyleOpen(false)}
+        defaultStyle={variationDraft?.exportStyle}
+        onConfirm={(style) => {
+          setExportStyleOpen(false)
+          onFinalizeVariation?.(style)
+        }}
+      />
+
+      <ConfirmDialog
+        open={discardVariationConfirm}
+        title="Discard Variation Draft"
+        message="Discard this variation draft? Your original document is unchanged. This cannot be undone after clearing."
+        confirmLabel="Discard Draft"
+        cancelLabel="Keep Editing"
+        danger
+        onConfirm={() => {
+          clearVariationWorkflow()
+          setDiscardVariationConfirm(false)
+          toast?.info?.('Variation discarded', 'Original document preserved')
+        }}
+        onCancel={() => setDiscardVariationConfirm(false)}
+      />
     </div>
   )
 }
@@ -410,6 +564,7 @@ function btn(variant = 'outline', sm = false) {
     sky:     { ...base, background: 'transparent', border: `1px solid #38BDF8`, color: '#38BDF8' },
     green:   { ...base, background: 'transparent', border: `1px solid #34D399`, color: '#34D399' },
     purple:  { ...base, background: 'transparent', border: `1px solid #A78BFA`, color: '#A78BFA' },
+    amber:   { ...base, background: 'transparent', border: `1px solid #F59E0B`, color: '#F59E0B' },
     outline: { ...base, background: 'transparent', border: `1px solid #253040`, color: '#6E84A3' },
   }
   return map[variant] || base

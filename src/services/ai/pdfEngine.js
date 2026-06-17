@@ -279,10 +279,43 @@ export function buildDocumentHTML(data, logoUrl) {
     <tbody>${d.procurement.map(r => `<tr><td>${esc(r.material || r.desc)}</td><td>${esc(r.quantity)} ${esc(r.unit)}</td>
       <td>${esc(r.supplier)}</td><td>${esc(r.leadTime)}</td><td>${esc(r.status)}</td></tr>`).join('')}</tbody></table></section>` : ''
 
-  const variationHtml = d.variations?.length ? `
-    <section class="export-section"><h2 class="sec">Variation Items</h2>
-    <table class="data"><thead><tr><th>Description</th><th class="num">Amount</th></tr></thead>
-    <tbody>${d.variations.map(r => `<tr><td>${esc(r.desc)}</td><td class="num">${ghs(r.amount)}</td></tr>`).join('')}</tbody></table></section>` : ''
+  const variationHtml = d.variations?.length ? (() => {
+    const summary = d.variationSummary
+    const summaryBlock = summary ? `
+      <div class="sum-row"><span>Original Estimate Total</span><span>${ghs(summary.originalEstimateTotal)}</span></div>
+      <div class="sum-row"><span>Total Additions</span><span>+ ${ghs(summary.totalAdditions)}</span></div>
+      <div class="sum-row"><span>Total Omissions</span><span>− ${ghs(summary.totalOmissions)}</span></div>
+      <div class="sum-row"><span>Total Reductions</span><span>− ${ghs(summary.totalReductions)}</span></div>
+      <div class="sum-row"><span>Total Increases</span><span>+ ${ghs(summary.totalIncreases)}</span></div>
+      <div class="sum-row"><span>Net Variation</span><span>${summary.netVariation >= 0 ? '+' : ''}${ghs(summary.netVariation)}</span></div>
+      <div class="sum-row grand"><span>REVISED CONTRACT SUM</span><span>${ghs(summary.revisedTotal)}</span></div>
+    ` : ''
+    const revLabel = meta.revisionNumber ? `Revision ${meta.revisionNumber}` : 'Variation Schedule'
+    const refLine = meta.originalQuoteRef
+      ? `<div class="notes" style="margin-bottom:8px">Original estimate ref: <strong>${esc(meta.originalQuoteRef)}</strong>${meta.variationNumber ? ` · ${esc(meta.variationNumber)}` : ''}</div>`
+      : ''
+    return `
+    <section class="export-section"><h2 class="sec">${esc(revLabel)}</h2>
+    ${refLine}
+    <table class="data"><thead><tr>
+      <th>Ref</th><th>Change</th><th>Description</th><th class="num">Orig Qty</th><th class="num">Rev Qty</th>
+      <th>Unit</th><th class="num">Orig Rate</th><th class="num">Rev Rate</th><th class="num">Variation +/-</th><th>Reason</th>
+    </tr></thead>
+    <tbody>${d.variations.map(r => `<tr>
+      <td>${esc(r.originalItemRef || r.itemNo || '')}</td>
+      <td>${esc((r.changeType || '').replace(/_/g, ' '))}</td>
+      <td>${esc(r.description || r.desc || '')}</td>
+      <td class="num">${esc(r.originalQty || '')}</td>
+      <td class="num">${esc(r.revisedQty || '')}</td>
+      <td>${esc(r.unit || '')}</td>
+      <td class="num">${ghs(r.originalRate)}</td>
+      <td class="num">${ghs(r.revisedRate)}</td>
+      <td class="num" style="color:${(r.difference || 0) >= 0 ? '#059669' : '#DC2626'}">${r.difference > 0 ? '+' : ''}${ghs(r.difference)}</td>
+      <td>${esc(r.reason || '')}</td>
+    </tr>`).join('')}</tbody></table>
+    ${summaryBlock ? `<div class="commercial-block" style="margin-top:12px">${summaryBlock}</div>` : ''}
+    </section>`
+  })() : ''
 
   const summaryRows = (audit || []).filter(a => a.layer && !a.bold)
 
