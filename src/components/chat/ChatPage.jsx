@@ -20,6 +20,10 @@ export default function ChatPage({
   onSavePricesToProfile,
   onChoosePricingSource,
   onStartNewProject,
+  onSaveSession,
+  onRestoreSession,
+  extractedPricesCount = 0,
+  livePricesCount = 0,
   setTab,
 }) {
   const toast = useToast()
@@ -58,6 +62,8 @@ export default function ChatPage({
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {msgs.length > 0 && (
             <>
+              <button onClick={onSaveSession} disabled={busy} style={btn('outline')}>Save Session Now</button>
+              <button onClick={onRestoreSession} disabled={busy} style={btn('outline')}>Restore Last Session</button>
               <button onClick={() => handleHeaderAction(onExtractPrices)} disabled={busy} style={btn('outline')}>Extract Prices from Chat</button>
               <button onClick={() => handleHeaderAction(onSavePricesToProfile)} disabled={busy} style={btn('outline')}>Save Prices to Profile</button>
               <button onClick={() => handleHeaderAction(onChoosePricingSource)} disabled={busy} style={btn('outline')}>Choose Pricing Source</button>
@@ -130,9 +136,14 @@ export default function ChatPage({
 
               {m.role === 'assistant' && !m.streaming && !m.failed && m.extract && (
                 <WorkflowPanel
-                  extract={m.extract}
+                  extract={{
+                    ...m.extract,
+                    sourceText: m.extract.sourceText || m.content || m.display || '',
+                  }}
                   workflowState={workflowState}
                   onAction={onWorkflowAction}
+                  extractedPricesCount={extractedPricesCount}
+                  livePricesCount={livePricesCount}
                   setTab={setTab}
                 />
               )}

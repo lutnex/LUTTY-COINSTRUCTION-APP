@@ -84,12 +84,14 @@ export default function QSExportWorkflow({
 
   if (!open) return null
 
-  if (!data || typeof data !== 'object') {
+  if (!data || typeof data !== 'object' || (!data.boqItems?.length && !data.boqRows?.length && !data.assumptions?.length && !data.exclusions?.length)) {
     return (
       <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.65)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
         <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, maxWidth: 480 }}>
           <div style={{ color: C.amber, fontWeight: 700, marginBottom: 8 }}>Workflow unavailable</div>
-          <div style={{ color: C.textDim, fontSize: 13, marginBottom: 16 }}>No BOQ or estimate data to review. Generate a BOQ in chat first.</div>
+          <div style={{ color: C.textDim, fontSize: 13, marginBottom: 16 }}>
+            Cannot perform this action yet. Required data is missing. Generate a BOQ or estimate in chat first.
+          </div>
           <button type="button" onClick={onClose} style={{ padding: '8px 14px', borderRadius: 6, background: C.amber, border: 'none', cursor: 'pointer', fontWeight: 600 }}>Close</button>
         </div>
       </div>

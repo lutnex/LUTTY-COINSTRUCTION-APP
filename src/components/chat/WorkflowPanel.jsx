@@ -5,16 +5,18 @@ import { PRESENTATION_STYLES } from '../../utils/qsWorkflow.js'
 import {
   WORKFLOW_ACTIONS,
   logWorkflowAction,
-  hasBoqOrEstimateData,
-  hasVariationData,
+  validateWorkflowAction,
   presentationStyleLabel,
 } from '../../utils/workflowActions.js'
+import { logWorkflowMissing } from '../../utils/sessionDebug.js'
 
 export default function WorkflowPanel({
   extract,
   onAction,
   workflowState = {},
   setTab,
+  extractedPricesCount = 0,
+  livePricesCount = 0,
 }) {
   const toast = useToast()
   const [pdfBusy, setPdfBusy] = useState(false)
@@ -23,9 +25,12 @@ export default function WorkflowPanel({
   if (!extract) return null
   if (!extract.hasBOQ && !extract.hasEstimate && !extract.hasRisks && !extract.hasVariation) return null
 
+  const actionContext = { workflowState, extractedPricesCount, livePricesCount }
   const selectedStyle = workflowState.presentationStyle || extract.presentationStyle
   const styleLabel = presentationStyleLabel(selectedStyle)
   const pricingLabel = workflowState.pricingSourceLabel || workflowState.pricingConfig?.profileName
+
+  const checkAction = (actionId) => validateWorkflowAction(actionId, extract, actionContext)
 
   const finish = (actionId, result) => {
     logWorkflowAction(actionId, { result: result ?? 'ok' })
@@ -35,6 +40,12 @@ export default function WorkflowPanel({
 
   const run = (actionId, opts = {}) => {
     if (busyAction) return
+    const validation = checkAction(actionId)
+    if (!validation.ok) {
+      logWorkflowMissing(actionId, validation.reason)
+      toast.warn('Action unavailable', validation.reason)
+      return
+    }
     if (!onAction) {
       toast.warn('Action unavailable', 'Workflow handler is not connected — refresh the page')
       logWorkflowAction(actionId, { error: 'no-handler' })
@@ -67,11 +78,18 @@ export default function WorkflowPanel({
 
   const handlePDF = () => {
     if (pdfBusy || busyAction) return
+    const validation = checkAction(WORKFLOW_ACTIONS.EXPORT_PDF)
+    if (!validation.ok) {
+      logWorkflowMissing(WORKFLOW_ACTIONS.EXPORT_PDF, validation.reason)
+      toast.warn('Action unavailable', validation.reason)
+      return
+    }
     if (!onAction) {
       toast.warn('Action unavailable', 'Workflow handler is not connected')
       return
     }
     setPdfBusy(true)
+    logWorkflowAction(WORKFLOW_ACTIONS.EXPORT_PDF, { phase: 'click' })
     const result = onAction(WORKFLOW_ACTIONS.EXPORT_PDF, extract)
     const done = () => setPdfBusy(false)
     if (result && typeof result.then === 'function') {
@@ -87,6 +105,19 @@ export default function WorkflowPanel({
 
   const confColor = { high: C.green, medium: C.amber, low: C.red }[extract.confidence] || C.textDim
   const variationCount = extract.variationItems?.length || 0
+
+  const btn = (actionId, props) => {
+    const validation = checkAction(actionId)
+    return (
+      <ActionBtn
+        {...props}
+        busy={busyAction === actionId}
+        disabled={!validation.ok || Boolean(busyAction)}
+        title={!validation.ok ? validation.reason : undefined}
+        onClick={() => run(actionId)}
+      />
+    )
+  }
 
   return (
     <div style={{ marginTop: 10, background: 'linear-gradient(135deg,rgba(10,42,67,.94),rgba(30,40,56,.97))', border: `1px solid rgba(245,158,11,.3)`, borderRadius: 10, padding: '13px 15px', animation: 'fadeSlideIn .3s ease' }}>
@@ -141,17 +172,19 @@ export default function WorkflowPanel({
       )}
 
       <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-        <ActionBtn label="📋 Import to BOQ" color="green" busy={busyAction === WORKFLOW_ACTIONS.IMPORT_BOQ} onClick={() => run(WORKFLOW_ACTIONS.IMPORT_BOQ)} />
-        <ActionBtn label="📄 Review" color="amber" busy={busyAction === WORKFLOW_ACTIONS.REVIEW} onClick={() => run(WORKFLOW_ACTIONS.REVIEW)} />
-        <ActionBtn label="💰 Extract Prices from Chat" color="green" busy={busyAction === WORKFLOW_ACTIONS.EXTRACT_PRICES} onClick={() => run(WORKFLOW_ACTIONS.EXTRACT_PRICES)} />
-        <ActionBtn label="💾 Save Prices to Profile" color="green" busy={busyAction === WORKFLOW_ACTIONS.SAVE_PRICES_PROFILE} onClick={() => run(WORKFLOW_ACTIONS.SAVE_PRICES_PROFILE)} />
-        <ActionBtn label="Choose Pricing Source" color="outline" busy={busyAction === WORKFLOW_ACTIONS.CHOOSE_PRICING_SOURCE} onClick={() => run(WORKFLOW_ACTIONS.CHOOSE_PRICING_SOURCE)} />
-        <ActionBtn label="Compare Profile vs Market" color="outline" busy={busyAction === WORKFLOW_ACTIONS.COMPARE_PROFILE_MARKET} onClick={() => run(WORKFLOW_ACTIONS.COMPARE_PROFILE_MARKET)} />
+        {btn(WORKFLOW_ACTIONS.IMPORT_BOQ, { label: '📋 Import to BOQ', color: 'green' })}
+        {btn(WORKFLOW_ACTIONS.REVIEW, { label: '📄 Review', color: 'amber' })}
+        {btn(WORKFLOW_ACTIONS.EXTRACT_PRICES, { label: '💰 Extract Prices from Chat', color: 'green' })}
+        {btn(WORKFLOW_ACTIONS.SAVE_PRICES_PROFILE, { label: '💾 Save Prices to Profile', color: 'green' })}
+        {btn(WORKFLOW_ACTIONS.CHOOSE_PRICING_SOURCE, { label: 'Choose Pricing Source', color: 'outline' })}
+        {btn(WORKFLOW_ACTIONS.COMPARE_PROFILE_MARKET, { label: 'Compare Profile vs Market', color: 'outline' })}
         <ActionBtn
           label="A. Premium Quotation"
           color="sky"
           active={selectedStyle === PRESENTATION_STYLES.PREMIUM}
           busy={busyAction === WORKFLOW_ACTIONS.PREMIUM_QUOTATION}
+          disabled={!checkAction(WORKFLOW_ACTIONS.PREMIUM_QUOTATION).ok || Boolean(busyAction)}
+          title={checkAction(WORKFLOW_ACTIONS.PREMIUM_QUOTATION).reason}
           onClick={() => run(WORKFLOW_ACTIONS.PREMIUM_QUOTATION)}
         />
         <ActionBtn
@@ -159,30 +192,37 @@ export default function WorkflowPanel({
           color="outline"
           active={selectedStyle === PRESENTATION_STYLES.DETAILED}
           busy={busyAction === WORKFLOW_ACTIONS.DETAILED_BOQ}
+          disabled={!checkAction(WORKFLOW_ACTIONS.DETAILED_BOQ).ok || Boolean(busyAction)}
+          title={checkAction(WORKFLOW_ACTIONS.DETAILED_BOQ).reason}
           onClick={() => run(WORKFLOW_ACTIONS.DETAILED_BOQ)}
         />
-        <ActionBtn label="→ Export to Document Generator" color="amber" busy={busyAction === WORKFLOW_ACTIONS.EXPORT_DOCGEN} onClick={() => run(WORKFLOW_ACTIONS.EXPORT_DOCGEN)} />
+        {btn(WORKFLOW_ACTIONS.EXPORT_DOCGEN, { label: '→ Export to Document Generator', color: 'amber' })}
+        {btn(WORKFLOW_ACTIONS.IMPORT_VARIATION, {
+          label: variationCount ? `📝 Import to Variation Order (${variationCount})` : '📝 Import to Variation Order',
+          color: 'sky',
+        })}
+        {btn(WORKFLOW_ACTIONS.SAVE_PROJECT, { label: '💾 Save Project', color: 'purple' })}
         <ActionBtn
-          label={variationCount ? `📝 Import to Variation Order (${variationCount})` : '📝 Import to Variation Order'}
-          color="sky"
-          busy={busyAction === WORKFLOW_ACTIONS.IMPORT_VARIATION}
-          onClick={() => run(WORKFLOW_ACTIONS.IMPORT_VARIATION)}
+          label={pdfBusy ? 'Exporting…' : '⬇ Export PDF'}
+          color="outline"
+          disabled={pdfBusy || Boolean(busyAction) || !checkAction(WORKFLOW_ACTIONS.EXPORT_PDF).ok}
+          title={checkAction(WORKFLOW_ACTIONS.EXPORT_PDF).reason}
+          onClick={handlePDF}
         />
-        <ActionBtn label="💾 Save Project" color="purple" busy={busyAction === WORKFLOW_ACTIONS.SAVE_PROJECT} onClick={() => run(WORKFLOW_ACTIONS.SAVE_PROJECT)} />
-        <ActionBtn label={pdfBusy ? 'Exporting…' : '⬇ Export PDF'} color="outline" disabled={pdfBusy || Boolean(busyAction)} onClick={handlePDF} />
       </div>
     </div>
   )
 }
 
-function ActionBtn({ label, color, onClick, busy, disabled, active }) {
+function ActionBtn({ label, color, onClick, busy, disabled, active, title }) {
   const base = wBtn(color, active)
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled || busy}
-      style={{ ...base, opacity: disabled || busy ? 0.6 : 1, cursor: disabled || busy ? 'not-allowed' : 'pointer' }}
+      title={title}
+      style={{ ...base, opacity: disabled || busy ? 0.55 : 1, cursor: disabled || busy ? 'not-allowed' : 'pointer' }}
     >
       {busy ? '⏳ ' : ''}{label}
     </button>

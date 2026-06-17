@@ -120,7 +120,7 @@ export function normalizeDocumentSections(input, { meta, extras } = {}) {
 
   return sections.map(s => {
     if (s.type === 'project_scope' && meta?.projectDescription) {
-      return { ...s, html: textToHtml(meta.projectDescription) }
+      return { ...s, html: textToHtml(meta.projectDescription), enabled: true, status: 'active' }
     }
     if (s.type === 'notes' && meta?.notes) {
       return { ...s, html: textToHtml(meta.notes) }
@@ -145,6 +145,74 @@ export function normalizeDocumentSections(input, { meta, extras } = {}) {
     }
     return s
   })
+}
+
+export function markdownToExportHtml(text = '') {
+  if (!text?.trim()) return ''
+
+  function tableBlockToHtml(block) {
+    const rows = block.trim().split('\n').filter(r => r.trim() && !/^\|[-| :]+\|$/.test(r.trim()))
+    if (rows.length < 1) return ''
+    const headerCells = rows[0].split('|').filter(c => c.trim()).map(c => `<th>${escapeHtml(c.trim())}</th>`).join('')
+    const bodyRows = rows.slice(1).map(row => {
+      const cells = row.split('|').filter(c => c.trim()).map(c => `<td>${escapeHtml(c.trim())}</td>`).join('')
+      return `<tr>${cells}</tr>`
+    }).join('')
+    if (!bodyRows) return ''
+    return `<table class="data"><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table>`
+  }
+
+  const parts = []
+  const tableRx = /((?:\|[^\n]+\|\n?)+)/g
+  let last = 0
+  let m
+  while ((m = tableRx.exec(text)) !== null) {
+    if (m.index > last) {
+      const chunk = text.slice(last, m.index)
+        .replace(/^#{2,4}\s+(.+)$/gm, (_, title) => `<h3>${escapeHtml(title.trim())}</h3>`)
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      parts.push(textToHtml(chunk))
+    }
+    parts.push(tableBlockToHtml(m[1]))
+    last = m.index + m[0].length
+  }
+  if (last < text.length) {
+    const chunk = text.slice(last)
+      .replace(/^#{2,4}\s+(.+)$/gm, (_, title) => `<h3>${escapeHtml(title.trim())}</h3>`)
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    parts.push(textToHtml(chunk))
+  }
+  return parts.filter(Boolean).join('')
+}
+
+function appendChatFallbackSection(sections, sourceText, { hasBoq } = {}) {
+  if (hasBoq || !sourceText?.trim()) return sections
+  const html = markdownToExportHtml(sourceText)
+  if (!stripHtml(html).trim()) return sections
+  const existing = sections.find(s => s.type === 'notes')
+  if (existing) {
+    return sections.map(s => s.type === 'notes'
+      ? { ...s, title: 'AI Estimate Output', html, enabled: true, status: 'active' }
+      : s)
+  }
+  return [
+    ...sections,
+    createSection('custom', { title: 'AI Estimate Output', html, enabled: true, status: 'active' }),
+  ]
+}
+
+/** Like normalizeDocumentSections but enables blocks that have AI/chat content for PDF/HTML export. */
+export function normalizeDocumentSectionsForExport(input, { meta, extras, sourceText, hasBoq } = {}) {
+  let sections = normalizeDocumentSections(input, { meta, extras })
+  sections = sections.map(s => {
+    if (s.status === 'deleted') return s
+    const hasHtml = stripHtml(s.html || '').trim().length > 0
+    if (hasHtml) {
+      return { ...s, enabled: true, status: 'active' }
+    }
+    return s
+  })
+  return appendChatFallbackSection(sections, sourceText, { hasBoq })
 }
 
 export function applyAiSuggestionsToSections(sections, extract) {

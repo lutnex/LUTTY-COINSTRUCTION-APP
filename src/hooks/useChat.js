@@ -33,9 +33,15 @@ export function useChat({ prices = [], onUsage, onExtract, persist = true } = {}
   }, [])
 
   useEffect(() => {
-    if (!persist || busy) return
-    saveChatSession(msgs)
-  }, [msgs, busy, persist])
+    if (!persist) return
+    const t = setTimeout(() => saveChatSession(msgs), 250)
+    return () => clearTimeout(t)
+  }, [msgs, persist])
+
+  const forceSave = useCallback(() => {
+    if (!persist) return false
+    return saveChatSession(msgs)
+  }, [msgs, persist])
 
   const clearImgPreview = useCallback(() => {
     if (imgUrlRef.current) {
@@ -191,9 +197,9 @@ export function useChat({ prices = [], onUsage, onExtract, persist = true } = {}
 
     let extract
     try {
-      extract = parseAIResponse(result.text)
+      extract = { ...parseAIResponse(result.text), sourceText: result.text }
     } catch {
-      extract = { hasBOQ: false, hasEstimate: false }
+      extract = { hasBOQ: false, hasEstimate: false, sourceText: result.text || '' }
     }
 
     const tokensUsed = (result.inputTokens ?? 0) + (result.outputTokens ?? 0)
@@ -251,6 +257,6 @@ export function useChat({ prices = [], onUsage, onExtract, persist = true } = {}
     msgs, inp, setInp, busy, progressLabel, attempt,
     attach, imgPrev, fileLoading, setAttach, setImgPrev: setImgPrevSafe,
     endRef, taRef, fileRef,
-    send, stop, clear, handleFile,
+    send, stop, clear, handleFile, forceSave,
   }
 }

@@ -30,6 +30,20 @@ export default function WorkflowReviewDialog({ open, data, presentationStyle, on
 
   if (!open) return null
 
+  if (!data) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.65)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, maxWidth: 480 }}>
+          <div style={{ color: C.amber, fontWeight: 700, marginBottom: 8 }}>Review unavailable</div>
+          <div style={{ color: C.textDim, fontSize: 13, marginBottom: 16 }}>
+            Cannot perform this action yet. Required data is missing.
+          </div>
+          <button type="button" onClick={onClose} style={{ padding: '8px 14px', borderRadius: 6, background: C.amber, border: 'none', cursor: 'pointer', fontWeight: 600 }}>Close</button>
+        </div>
+      </div>
+    )
+  }
+
   const total = review.finalTotal || data?.contractSum || data?.pricing?.layers?.finalEstimate || 0
   const styleLabel = presentationStyleLabel(presentationStyle)
 

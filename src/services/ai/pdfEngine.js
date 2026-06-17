@@ -13,7 +13,7 @@ import {
   materialsGrandTotal,
   normalizeMaterialState,
 } from '../../utils/materialCategories.js'
-import { normalizeDocumentSections, getEnabledSections, stripHtml } from '../../utils/documentSections.js'
+import { normalizeDocumentSectionsForExport, getEnabledSections, stripHtml } from '../../utils/documentSections.js'
 import { buildOrderedSectionsHtml } from '../../utils/sectionRenderer.js'
 
 const LOG_PREFIX = '[pdf-export]'
@@ -215,9 +215,18 @@ export function buildDocumentHTML(data, logoUrl) {
   const paymentTermsHtml = paymentTermsToHtml(meta.paymentTerms)
   const documentSections = d.documentSections?.length
     ? d.documentSections
-    : normalizeDocumentSections(null, {
+    : normalizeDocumentSectionsForExport(null, {
       meta,
-      extras: { drawingAnalysis: d.drawingAnalysis, assumptions: d.assumptions, exclusions: d.exclusions },
+      extras: {
+        drawingAnalysis: d.drawingAnalysis,
+        assumptions: d.assumptions,
+        exclusions: d.exclusions,
+        provisional: d.provisional,
+        optionalItems: d.optionalItems,
+        clientSuppliedItems: d.clientSuppliedItems,
+      },
+      sourceText: d.sourceText,
+      hasBoq: d.boqRows?.length > 0,
     })
   const orderedBodyHtml = buildOrderedSectionsHtml({ ...d, meta, documentSections }, { grand, audit })
 
@@ -504,6 +513,42 @@ export async function generatePDF(data, logoUrl) {
     y = doc.lastAutoTable.finalY + 6
   }
 
+  const pdfFromRichSection = (section) => {
+    const html = section.html || ''
+    if (!html.trim()) return
+    secHdr(section.title)
+    if (typeof DOMParser !== 'undefined' && html.includes('<table')) {
+      const parsed = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html')
+      const tables = parsed.querySelectorAll('table')
+      if (tables.length) {
+        for (const table of tables) {
+          const headers = [...table.querySelectorAll('thead th')].map(th => th.textContent.trim())
+          const rows = [...table.querySelectorAll('tbody tr')].map(tr =>
+            [...tr.querySelectorAll('td')].map(td => td.textContent.trim()),
+          )
+          if (headers.length && rows.length) {
+            doc.autoTable({
+              startY: y,
+              head: [headers],
+              body: rows,
+              margin: { left: ML, right: PW - MR, top: 38, bottom: 20 },
+              headStyles: { fillColor: [10, 42, 67], fontSize: 8, textColor: 255 },
+              bodyStyles: { fontSize: 8, textColor: 30 },
+              styles: { overflow: 'linebreak', cellWidth: 'wrap' },
+              showHead: 'everyPage',
+              didDrawPage: () => { drawHdr(); y = 38 },
+            })
+            y = doc.lastAutoTable.finalY + 6
+          }
+        }
+        const prose = stripHtml(html.replace(/<table[\s\S]*?<\/table>/gi, ''))
+        if (prose.trim()) bodyText(prose)
+        return
+      }
+    }
+    bodyText(stripHtml(html))
+  }
+
   drawHdr()
   y = 37
 
@@ -519,9 +564,18 @@ export async function generatePDF(data, logoUrl) {
 
   const documentSections = d.documentSections?.length
     ? d.documentSections
-    : normalizeDocumentSections(null, {
+    : normalizeDocumentSectionsForExport(null, {
       meta,
-      extras: { drawingAnalysis: d.drawingAnalysis, assumptions: d.assumptions, exclusions: d.exclusions },
+      extras: {
+        drawingAnalysis: d.drawingAnalysis,
+        assumptions: d.assumptions,
+        exclusions: d.exclusions,
+        provisional: d.provisional,
+        optionalItems: d.optionalItems,
+        clientSuppliedItems: d.clientSuppliedItems,
+      },
+      sourceText: d.sourceText,
+      hasBoq: d.boqRows?.length > 0,
     })
 
   for (const section of getEnabledSections(documentSections)) {
@@ -543,20 +597,33 @@ export async function generatePDF(data, logoUrl) {
       case 'takeoff':
       case 'assumptions':
       case 'exclusions':
+      case 'provisional':
+      case 'optional_items':
+      case 'client_supplied':
       case 'notes':
-      case 'custom': {
-        const text = stripHtml(section.html)
-        if (text) { secHdr(section.title); bodyText(text) }
+      case 'custom':
+        pdfFromRichSection(section)
         break
-      }
       case 'boq':
-        if (d.boqRows?.length) {
+        if (d.boqRows?.length || d.boqCategorySummaries?.length) {
+          if (d.presentationStyle === 'premium' && d.boqCategorySummaries?.length) {
+            autoTable(
+              ['Category', 'Amount (GHS)'],
+              d.boqCategorySummaries.map(g => [
+                `${g.section}\n${g.summaryDesc || ''}`,
+                fmtN(g.subtotal),
+              ]),
+              section.title || 'Premium Quotation Summary',
+            )
+            break
+          }
           const body = []
           let cs = ''
-          for (const row of d.boqRows) {
+          const visible = (d.boqRows || []).filter(r => !r.hideInPremium && r.supplyType !== 'excluded' && !r.excluded)
+          for (const row of visible) {
             if (row.section !== cs) {
               cs = row.section
-              body.push([{ content: cs.toUpperCase(), colSpan: 5, styles: { fontStyle: 'bold', fillColor: [238, 242, 248] } }])
+              body.push([{ content: (cs || 'General').toUpperCase(), colSpan: 5, styles: { fontStyle: 'bold', fillColor: [238, 242, 248] } }])
             }
             body.push([
               row.desc || '', row.unit || '', row.qty || '—',
@@ -564,7 +631,7 @@ export async function generatePDF(data, logoUrl) {
               row.clientSupplied ? 'CLIENT' : fmtN(parseFloat(row.amount)),
             ])
           }
-          autoTable(['Description', 'Unit', 'Qty', 'Rate', 'Amount'], body, section.title)
+          if (body.length) autoTable(['Description', 'Unit', 'Qty', 'Rate', 'Amount'], body, section.title)
         }
         break
       case 'materials': {

@@ -42,10 +42,16 @@ import {
   loadWorkflowSession,
   clearWorkflowSession,
   buildMergedFromExtract,
+  buildPdfExportPayload,
+  enrichExtractForExport,
   canOpenQsWorkflow,
   ensureBoqRows,
+  validateWorkflowAction,
 } from './utils/workflowActions.js'
-import { serializeChatMessages } from './utils/sessionStore.js'
+import TabErrorBoundary from './components/shared/TabErrorBoundary.jsx'
+import { useWorkspaceSession } from './hooks/useWorkspaceSession.js'
+import { clearWorkspaceSnapshot } from './utils/workspaceSession.js'
+import { logSessionDebug } from './utils/sessionDebug.js'
 
 function getLastChatExtract(msgs) {
   for (let i = msgs.length - 1; i >= 0; i--) {
@@ -117,13 +123,14 @@ function AppShellInner({ projState, dispatch }) {
   const [priceProfileState, setPriceProfileState] = useState(() => loadPriceProfileState())
   const prices = useMemo(() => getActiveProfileItems(priceProfileState), [priceProfileState])
   const activeProfile = useMemo(() => getActiveProfile(priceProfileState), [priceProfileState])
+  const bootSession = useMemo(() => loadAppSession(), [])
+  const [extractedPrices, setExtractedPrices] = useState(() => bootSession?.extractedPrices || [])
   const setPrices = useCallback((next) => {
     setPriceProfileState(prev => updateActiveProfileItems(prev, next))
   }, [])
   const [livePrices, setLivePrices] = useState([])
   const [savePricesOpen, setSavePricesOpen] = useState(false)
   const [extractPricesOpen, setExtractPricesOpen] = useState(false)
-  const [extractedPrices, setExtractedPrices] = useState([])
   const [pricingSourceOpen, setPricingSourceOpen] = useState(false)
   const [workflowReviewOpen, setWorkflowReviewOpen] = useState(false)
   const [workflowReviewData, setWorkflowReviewData] = useState(null)
@@ -331,8 +338,14 @@ function AppShellInner({ projState, dispatch }) {
   }, [priceProfileState])
 
   useEffect(() => {
-    saveAppSession({ tab })
-  }, [tab])
+    saveAppSession({
+      tab,
+      activeProjectId: projState.activeId,
+      extractedPrices,
+      estimatePreferences,
+      priceProfileActiveId: priceProfileState.activeProfileId,
+    })
+  }, [tab, projState.activeId, extractedPrices, estimatePreferences, priceProfileState.activeProfileId])
 
   useEffect(() => {
     saveWorkflowSession({
@@ -391,6 +404,18 @@ function AppShellInner({ projState, dispatch }) {
   }, [intelligence])
 
   const chat = useChat({ prices, onUsage: handleUsage, onExtract: handleAIExtract })
+
+  const session = useWorkspaceSession({
+    tab,
+    chatMsgs: chat.msgs,
+    intelligenceData: intelligence.data,
+    workflowState,
+    extractedPrices,
+    activeProjectId: projState.activeId,
+    estimatePreferences,
+    priceProfileActiveId: priceProfileState.activeProfileId,
+    toast,
+  })
 
   const applyExtractNow = useCallback((extract, opts = {}) => {
     const merged = intelligence.recomputePricing(
@@ -666,9 +691,15 @@ function AppShellInner({ projState, dispatch }) {
   }, [activeProfile, intelligence, toast])
 
   const handleStartNewProject = useCallback(() => {
+    if (!window.confirm('Clear chat and start a new project? Save your session first if you want to keep this work.')) {
+      return
+    }
+    chat.forceSave?.()
     chat.clear()
     clearAppSession()
     clearWorkflowSession()
+    clearWorkspaceSnapshot()
+    sessionStorage.removeItem('constructiq-session-restored')
     setWorkflowState({})
     intelligence.setData(emptyProjectData())
     docGen.resetDocument({ newQuoteNum: true })
@@ -682,8 +713,9 @@ function AppShellInner({ projState, dispatch }) {
     setWorkflowReviewData(null)
     setExtractedPrices([])
     setTab('chat')
-    toast.info('New project started', 'Chat and workflow cleared — use this when you want a fresh start')
-  }, [chat, docGen, intelligence, toast])
+    logSessionDebug('new-project-cleared')
+    toast.info('New project started', 'Chat and workflow cleared — use Save Session to keep work before clearing')
+  }, [chat, docGen, intelligence, session, toast])
 
   // ── Navigate + fire a prompt ─────────────────────────────────────────────
   const firePrompt = useCallback((prompt) => {
@@ -730,34 +762,12 @@ function AppShellInner({ projState, dispatch }) {
     const tid = toast.loading('Generating PDF…')
     setPdfStatus('Preparing…')
     try {
-      applyExtractNow(extract)
-      const payload = intelligence.getDocGenPayload({ docType: 'estimate', source: 'ai-export' })
-      const style = workflowState.presentationStyle || intelligence.data?.workflow?.presentationStyle
-      const data = {
-        type: style === PRESENTATION_STYLES.PREMIUM ? 'quotation' : 'estimate',
-        meta: payload?.meta || {
-          quoteNum: 'DLC-AI-EXPORT',
-          date: new Date().toISOString().slice(0, 10),
-          validDays: '30',
-          clientName: '',
-          clientContact: '',
-          clientEmail: '',
-          projectLocation: '',
-          projectTitle: extract.projectTitle || 'Construction Estimate',
-          projectDescription: extract.projectScope || '',
-        },
-        boqRows: payload?.boqRows || extract.boqRows || [],
-        materials: payload?.materials || extract.materials || [],
-        matCategories: payload?.matCategories || extract.matCategories || [],
-        labor: payload?.labor || extract.labor || [],
-        prelims: payload?.prelims || [],
-        assumptions: payload?.assumptions || extract.assumptions || [],
-        exclusions: payload?.exclusions || extract.exclusions || [],
-        drawingAnalysis: payload?.drawingAnalysis || { takeoffNotes: extract.takeoffNotes || '' },
-        pricing: payload?.pricing,
-        contractSum: payload?.contractSum || extract.contractSum || 0,
-        presentationStyle: style,
-      }
+      const enriched = enrichExtractForExport(extract)
+      const merged = applyExtractNow(enriched, {
+        replaceBoq: ensureBoqRows(enriched).length > 0,
+      })
+      const style = workflowState.presentationStyle || merged.workflow?.presentationStyle
+      const data = buildPdfExportPayload(merged, enriched, { style })
       const result = await downloadPDF(
         data,
         `${extract.projectTitle || 'estimate'}.pdf`,
@@ -776,7 +786,7 @@ function AppShellInner({ projState, dispatch }) {
     } finally {
       setPdfStatus(null)
     }
-  }, [toast, companyLogo, intelligence, workflowState.presentationStyle, applyExtractNow])
+  }, [toast, companyLogo, workflowState.presentationStyle, applyExtractNow])
 
   const handleConfirmExtractedPrices = useCallback((items) => {
     setExtractedPrices(items)
@@ -805,6 +815,16 @@ function AppShellInner({ projState, dispatch }) {
       hasVariation: hasVariationData(extract),
       boqRows: ensureBoqRows(extract).length,
     })
+
+    const validation = validateWorkflowAction(actionId, extract, {
+      workflowState,
+      extractedPricesCount: extractedPrices.length,
+      livePricesCount: livePrices?.length || 0,
+    })
+    if (!validation.ok) {
+      toast.warn('Action unavailable', validation.reason)
+      return { ok: false, reason: validation.reason }
+    }
 
     try {
       switch (actionId) {
@@ -950,11 +970,14 @@ function AppShellInner({ projState, dispatch }) {
       console.error(`[WorkflowAction] ${actionId} failed:`, err)
       toast.error('Action failed', err?.message || 'Something went wrong — chat state preserved')
       return { ok: false, error: err?.message }
+    } finally {
+      session.saveNow()
+      chat.forceSave?.()
     }
   }, [
     applyExtractNow, extractPricesFromContext, extractedPrices.length, handleImportVariation,
     handleOpenQSWorkflow, handlePDFExport, intelligence, livePrices, setPresentationStyle,
-    toast, workflowState.presentationStyle,
+    toast, workflowState.presentationStyle, session, chat,
   ])
 
   // ── BOQ import from AI (legacy callback) ───────────────────────────────────
@@ -1176,6 +1199,7 @@ function AppShellInner({ projState, dispatch }) {
       )}
 
       <main style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <TabErrorBoundary label="Main workspace" onGoChat={() => setTab('chat')}>
         {tab === 'chat' && (
           <ChatPage
             chat={chat}
@@ -1185,6 +1209,14 @@ function AppShellInner({ projState, dispatch }) {
             onExtractPrices={() => handleWorkflowAction(WORKFLOW_ACTIONS.EXTRACT_PRICES, getLastChatExtract(chat.msgs))}
             onSavePricesToProfile={() => handleWorkflowAction(WORKFLOW_ACTIONS.SAVE_PRICES_PROFILE, getLastChatExtract(chat.msgs))}
             onChoosePricingSource={() => handleWorkflowAction(WORKFLOW_ACTIONS.CHOOSE_PRICING_SOURCE, getLastChatExtract(chat.msgs))}
+            onSaveSession={() => {
+              session.saveNow()
+              chat.forceSave?.()
+              toast.success('Session saved', 'Chat, BOQ, and workflow state stored locally')
+            }}
+            onRestoreSession={() => session.restoreLastSession({ reload: true })}
+            extractedPricesCount={extractedPrices.length}
+            livePricesCount={livePrices?.length || 0}
             onStartNewProject={handleStartNewProject}
             setTab={setTab}
           />
@@ -1334,6 +1366,7 @@ function AppShellInner({ projState, dispatch }) {
             setPreferences={setEstimatePreferences}
           />
         )}
+        </TabErrorBoundary>
       </main>
 
       <QSExportWorkflow
