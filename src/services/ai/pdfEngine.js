@@ -15,6 +15,17 @@ import {
 } from '../../utils/materialCategories.js'
 import { normalizeDocumentSectionsForExport, getEnabledSections, stripHtml } from '../../utils/documentSections.js'
 import { buildOrderedSectionsHtml } from '../../utils/sectionRenderer.js'
+import {
+  ghsAmount,
+  ghsTableDiff,
+  wrapDeLuteroitsDocument,
+  buildDocumentFooter,
+  buildSignatureBlock,
+  buildCommercialSummaryBlock,
+  buildVariationSummaryBlock,
+  buildMetaGrid,
+} from '../../utils/deLuteroitsDocumentTemplate.js'
+import { downloadHtmlAsPdf } from '../../utils/htmlToPdf.js'
 
 const LOG_PREFIX = '[pdf-export]'
 
@@ -58,8 +69,7 @@ function esc(s) {
 }
 
 function ghs(v) {
-  const n = parseFloat(v)
-  return isFinite(n) ? `GHS ${n.toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'
+  return ghsAmount(v)
 }
 
 function enrichExportData(data, logoUrl) {
@@ -281,15 +291,7 @@ export function buildDocumentHTML(data, logoUrl) {
 
   const variationHtml = d.variations?.length ? (() => {
     const summary = d.variationSummary
-    const summaryBlock = summary ? `
-      <div class="sum-row"><span>Original Estimate Total</span><span>${ghs(summary.originalEstimateTotal)}</span></div>
-      <div class="sum-row"><span>Total Additions</span><span>+ ${ghs(summary.totalAdditions)}</span></div>
-      <div class="sum-row"><span>Total Omissions</span><span>− ${ghs(summary.totalOmissions)}</span></div>
-      <div class="sum-row"><span>Total Reductions</span><span>− ${ghs(summary.totalReductions)}</span></div>
-      <div class="sum-row"><span>Total Increases</span><span>+ ${ghs(summary.totalIncreases)}</span></div>
-      <div class="sum-row"><span>Net Variation</span><span>${summary.netVariation >= 0 ? '+' : ''}${ghs(summary.netVariation)}</span></div>
-      <div class="sum-row grand"><span>REVISED CONTRACT SUM</span><span>${ghs(summary.revisedTotal)}</span></div>
-    ` : ''
+    const summaryBlock = summary ? buildVariationSummaryBlock(summary) : ''
     const revLabel = meta.revisionNumber ? `Revision ${meta.revisionNumber}` : 'Variation Schedule'
     const refLine = meta.originalQuoteRef
       ? `<div class="notes" style="margin-bottom:8px">Original estimate ref: <strong>${esc(meta.originalQuoteRef)}</strong>${meta.variationNumber ? ` · ${esc(meta.variationNumber)}` : ''}</div>`
@@ -310,7 +312,7 @@ export function buildDocumentHTML(data, logoUrl) {
       <td>${esc(r.unit || '')}</td>
       <td class="num">${ghs(r.originalRate)}</td>
       <td class="num">${ghs(r.revisedRate)}</td>
-      <td class="num" style="color:${(r.difference || 0) >= 0 ? '#059669' : '#DC2626'}">${r.difference > 0 ? '+' : ''}${ghs(r.difference)}</td>
+      <td class="num">${ghsTableDiff(r.difference)}</td>
       <td>${esc(r.reason || '')}</td>
     </tr>`).join('')}</tbody></table>
     ${summaryBlock ? `<div class="commercial-block" style="margin-top:12px">${summaryBlock}</div>` : ''}
@@ -331,7 +333,7 @@ export function buildDocumentHTML(data, logoUrl) {
     <section class="export-section"><h2 class="sec">Exclusions &amp; Clarifications</h2>
     <div class="notes"><ul>${d.exclusions.map(a => `<li>${esc(a)}</li>`).join('')}</ul></div></section>` : ''
 
-  const metaCells = [
+  const metaHtml = buildMetaGrid([
     ['Reference', meta.quoteNum],
     ['Date issued', fmtDate(meta.date)],
     ['Valid until', validUntil(meta.date, meta.validDays)],
@@ -339,7 +341,7 @@ export function buildDocumentHTML(data, logoUrl) {
     ['Contact', meta.clientContact],
     ['Email', meta.clientEmail],
     ['Location', meta.projectLocation],
-  ].map(([l, v]) => `<div class="meta-cell"><div class="meta-lbl">${esc(l)}</div><div class="meta-val">${esc(v || '—')}</div></div>`).join('')
+  ])
 
   const executiveHtml = meta.executiveSummary ? `
     <section class="export-section"><h2 class="sec">Executive Summary</h2>
@@ -351,9 +353,7 @@ export function buildDocumentHTML(data, logoUrl) {
 
   const commercialHtml = (grand > 0 || summaryRows.length) ? `
     <section class="export-section commercial-block">
-      <h2 class="sec">Commercial Summary</h2>
-      ${summaryRows.map(a => `<div class="sum-row"><span>${esc(a.layer)}</span><span>${a.isDeduction ? '− ' : ''}${ghs(a.amount)}</span></div>`).join('')}
-      <div class="sum-row grand"><span>FINAL CONTRACT SUM</span><span>${ghs(grand)}</span></div>
+      ${buildCommercialSummaryBlock(summaryRows, grand, 'FINAL CONTRACT SUM')}
     </section>` : ''
 
   const paymentHtml = paymentTermsHtml ? `
@@ -364,66 +364,19 @@ export function buildDocumentHTML(data, logoUrl) {
 
   const legacyBodyHtml = ''
 
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>
-<title>${esc(docTitle)}</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{font-family:Helvetica,Arial,sans-serif;background:#e8ecf2;color:#1a1a2e;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.document{width:210mm;min-height:297mm;background:#fff;margin:12px auto;box-shadow:0 4px 20px rgba(0,0,0,.1)}
-.hdr{background:#0A2A43;padding:20px 28px;display:flex;justify-content:space-between;align-items:flex-start;gap:14px}
-.cn{font-size:15px;font-weight:800;color:#fff}
-.cd{font-size:9px;color:rgba(255,255,255,.75);line-height:1.5;margin-top:5px}
-.logo-wrap{width:50px;height:50px;flex-shrink:0;background:#fff;border-radius:7px;padding:3px;display:flex;align-items:center;justify-content:center}
-.logo-wrap img{max-width:100%;max-height:100%;object-fit:contain}
-.logo-fb{width:44px;height:44px;background:#B00020;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:#fff}
-.ac{height:3px;background:linear-gradient(90deg,#B00020,#0A2A43)}
-.bd{padding:24px 28px 32px}
-.dt{font-size:19px;font-weight:800;color:#0A2A43}
-.ds{font-size:11px;color:#B00020;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin:6px 0 14px}
-.meta{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:16px}
-.meta-cell{background:#f4f7fb;border:1px solid #d0d8e8;padding:7px 9px;border-radius:4px}
-.meta-lbl{font-size:8px;font-weight:700;color:#B00020;text-transform:uppercase}
-.meta-val{font-size:10px;font-weight:700;color:#0A2A43;margin-top:2px}
-.scope{background:#f4f7fb;border-left:3px solid #0A2A43;padding:10px 12px;margin-bottom:14px;font-size:10.5px;line-height:1.55}
-.export-section{margin-bottom:14px}
-.sec{font-size:11px;font-weight:800;color:#0A2A43;text-transform:uppercase;margin:16px 0 7px;border-bottom:2px solid #B00020;padding-bottom:3px}
-table.data{width:100%;border-collapse:collapse;margin-bottom:12px;font-size:10px}
-table.data thead tr{background:#0A2A43}
-table.data th{padding:7px 9px;text-align:left;font-size:8.5px;color:#fff;text-transform:uppercase}
-table.data td{padding:6px 9px;border-bottom:1px solid #e0e8f0;vertical-align:top}
-table.data tr.section-row td{background:#eef2f8;font-weight:700;color:#0A2A43}
-table.data tr.subtotal-row td{background:#f8fafc;font-weight:700;color:#0A2A43;border-top:1px solid #d0d8e8}
-table.data tr.grand-row td{background:#0A2A43;color:#FCD34D;font-weight:800}
-table.data td.num{text-align:right}
-table.data td.client{color:#B00020;font-weight:600}
-.sum-row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #eee;font-size:10.5px}
-.sum-row.grand{background:#0A2A43;color:#FCD34D;padding:10px 12px;border-radius:5px;margin-top:6px;font-weight:800}
-.notes{font-size:10px;line-height:1.55;padding:10px;background:#fafbfc;border:1px solid #e0e8f0;border-radius:4px}
-.notes ul{margin:0;padding-left:16px}
-.ftr{background:#0A2A43;padding:9px 28px;display:flex;justify-content:space-between;font-size:8.5px;color:rgba(255,255,255,.85);margin-top:20px}
-.sig{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:20px;padding-top:14px;border-top:1px solid #ddd}
-.sig-lbl{font-size:8px;font-weight:700;color:#B00020;text-transform:uppercase}
-.sig-box{height:44px;background:#eee;border-radius:4px;margin:6px 0}
-@media print{html,body{background:#fff;margin:0}.document{margin:0;box-shadow:none;width:100%}table.data thead{display:table-header-group}}
-</style></head><body>
-<div class="document" id="export-document-root">
-  <div class="hdr">
-    <div><div class="cn">${esc(d.company.name)}</div><div class="cd">${esc(d.company.address)}<br/>Reg: ${esc(d.company.registration)}<br/>
-    ${esc(d.company.phone1)} · ${esc(d.company.email)}<br/>${esc(d.company.website)}</div></div>
-    <div class="logo-wrap"><img src="${logo}" alt="Logo" onerror="this.outerHTML='<div class=logo-fb>${initials}</div>'"/></div>
-  </div>
-  <div class="ac"></div>
-  <div class="bd">
-    <div class="dt">${esc(docTitle)}</div>
-    <div class="ds">${esc(meta.projectTitle || 'Construction Project')}</div>
-    ${orderedBodyHtml}
-    <div class="sig">
-      <div><div class="sig-lbl">Prepared by</div><div class="sig-box"></div><div style="font-size:9px">${esc(d.company.authorizedBy)} — ${esc(d.company.position)}</div></div>
-      <div><div class="sig-lbl">Client acceptance</div><div class="sig-box"></div><div style="font-size:9px">${esc(meta.clientName || 'Client')}</div></div>
-    </div>
-  </div>
-  <div class="ftr"><span>${esc(d.company.name)} · ${esc(d.company.registration)}</span><span>Generated: ${esc(ts)}</span></div>
-</div></body></html>`
+  const bodyHtml = `
+    ${orderedBodyHtml ? '' : metaHtml}
+    ${orderedBodyHtml || [executiveHtml, scopeHtml, takeoffHtml, assumptionsHtml, exclusionsHtml, boqHtml, matsHtml, laborHtml, prelimsHtml, risksHtml, procHtml, variationHtml, commercialHtml, paymentHtml, notesHtml, legacyBodyHtml].join('')}
+    ${buildSignatureBlock(d.company)}
+    ${buildDocumentFooter(d.company)}`
+
+  return wrapDeLuteroitsDocument({
+    pageTitle: esc(docTitle),
+    docTitle,
+    subtitle: meta.projectTitle || meta.quoteNum || 'Construction Project',
+    bodyHtml,
+    company: d.company,
+  })
 }
 
 export function generateHTMLFallback(data, logoUrl) {
@@ -795,18 +748,28 @@ export async function downloadPDF(data, filename, onProgress, logoUrl) {
     exportLog('dom-rendering', 'Preview HTML contains all expected sections')
   }
 
+  onProgress?.('Generating PDF…')
+  exportLog('pdf-generation', 'HTML-to-PDF via html2canvas (no third-party watermarks)')
+  const htmlResult = await downloadHtmlAsPdf(
+    previewHtml,
+    filename.endsWith('.pdf') ? filename : `${filename}.pdf`,
+    onProgress,
+  )
+  if (htmlResult.ok) {
+    exportLog('file-saving', { filename, method: 'html2canvas' })
+    return { ok: true, method: 'pdf' }
+  }
+
   try {
-    onProgress?.('Generating PDF…')
-    exportLog('pdf-generation', 'Starting jsPDF autoTable export (no canvas capture)')
+    exportLog('pdf-generation', 'Falling back to jsPDF autoTable export')
     const bytes = await generatePDF(enriched, logo)
     if (bytes) {
       onProgress?.('Saving PDF…')
       exportLog('file-saving', { filename, bytes: bytes.byteLength })
       const blob = new Blob([bytes], { type: 'application/pdf' })
       triggerDownload(blob, filename.endsWith('.pdf') ? filename : `${filename}.pdf`)
-      return { ok: true, method: 'pdf' }
+      return { ok: true, method: 'pdf-fallback' }
     }
-    exportLog('pdf-generation', 'jsPDF returned null — falling back to HTML')
   } catch (e) {
     exportLog('pdf-generation', { error: e.message })
     console.error(`${LOG_PREFIX} PDF generation failed:`, e)

@@ -173,6 +173,20 @@ check('supabase schema includes variation_orders and revised_documents tables', 
   assert.match(sql, /document_data JSONB/)
 })
 
+check('shared DeLuteroits document template exists for all exports', () => {
+  assert.ok(existsSync(join(root, 'src/utils/deLuteroitsDocumentTemplate.js')))
+  assert.ok(existsSync(join(root, 'src/components/docgen/DeLuteroitsDocumentTemplate.jsx')))
+  assert.ok(existsSync(join(root, 'src/utils/htmlToPdf.js')))
+  const tpl = read('src/utils/deLuteroitsDocumentTemplate.js')
+  assert.match(tpl, /DELUTEROITS_DOCUMENT_STYLES/)
+  assert.match(tpl, /wrapDeLuteroitsDocument/)
+  assert.match(tpl, /#0A2A43/)
+  assert.match(tpl, /#B00020/)
+  const exp = read('src/utils/variationExport.js')
+  assert.match(exp, /deLuteroitsDocumentTemplate/)
+  assert.match(exp, /downloadHtmlAsPdf/)
+})
+
 // ── Report ──────────────────────────────────────────────────────────────────
 const failed = checks.filter(c => !c.ok)
 for (const c of checks) {
