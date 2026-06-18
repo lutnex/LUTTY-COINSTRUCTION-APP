@@ -111,6 +111,7 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
     ...pricingInputFromConsolidated(consolidated, base),
     materials,
     financialAdjustments: base.financialAdjustments ?? undefined,
+    commercialBreakdown: Object.keys(commercialBreakdown).length ? commercialBreakdown : base.commercialBreakdown,
   }
 
   const pricing = base.projectEstimate?.locked
@@ -184,6 +185,7 @@ export function projectDataToDocPayload(data, { docType = 'boq', source = 'intel
     materials: data.materials,
     labor: data.labor,
     financialAdjustments: data.financialAdjustments,
+    commercialBreakdown: data.commercialBreakdown,
   })
 
   return {

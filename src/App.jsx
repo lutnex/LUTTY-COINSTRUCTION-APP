@@ -108,7 +108,6 @@ import {
   reconcileMaterialSchedule,
   resolveCommercialBreakdown,
 } from './utils/materialAudit.js'
-import { materialsGrandTotal } from './utils/materialCategories.js'
 import EstimateApprovalDialog from './components/shared/EstimateApprovalDialog.jsx'
 import {
   lockProjectEstimate,
@@ -599,7 +598,7 @@ function AppShellInner({ projState, dispatch }) {
     const { input, commercialBreakdown, chatExtract } = getReconciledEstimateInput(estimateApprovalInput)
     return {
       input,
-      breakdown: buildApprovalBreakdown(input),
+      breakdown: buildApprovalBreakdown({ ...input, commercialBreakdown }),
       materialAudit: buildMaterialAudit({
         materials: input.materials,
         importBaseline: intelligence.data?.importBaseline,
@@ -616,59 +615,18 @@ function AppShellInner({ projState, dispatch }) {
   ])
 
   useEffect(() => {
-    if (!estimateApprovalOpen || !estimateApprovalBundle) return
-    const { input, commercialBreakdown } = estimateApprovalBundle
-    const intel = intelligence.data
-    const currentTotal = materialsGrandTotal(intel?.materials || [])
-    const nextTotal = materialsGrandTotal(input.materials || [])
-    const needsMaterials = Math.abs(currentTotal - nextTotal) > 0.02
-    const needsCommercial = commercialBreakdown?.materials > 0
-      && !intel?.commercialBreakdown?.materials
-
-    if (!needsMaterials && !needsCommercial) return
-
-    const next = intelligence.recomputePricing({
-      ...intel,
-      materials: needsMaterials ? input.materials : intel.materials,
-      commercialBreakdown: needsCommercial ? commercialBreakdown : intel.commercialBreakdown,
-    })
-    intelligence.setData(next)
-
-    if (needsMaterials && input.materials?.length) {
-      const payload = projectDataToDocPayload(next, { docType: 'boq', source: 'ai-chat' })
-      if (payload?.materials?.length) {
-        docGen.applyBOQTransfer({ ...payload, source: 'ai-chat' })
-      }
-    }
-  }, [estimateApprovalOpen, estimateApprovalBundle]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
     const chatExtract = getLastChatExtract(chat.msgs)
     const commercialBreakdown = resolveCommercialBreakdown(intelligence.data, chatExtract)
     if (!commercialBreakdown?.materials) return
 
-    const reconciled = reconcileMaterialSchedule(intelligence.data?.materials || docGen.mats, {
-      commercialBreakdown,
-      importBaseline: intelligence.data?.importBaseline,
-    })
-    const currentTotal = materialsGrandTotal(intelligence.data?.materials || docGen.mats || [])
-    const nextTotal = materialsGrandTotal(reconciled)
-    const needsHeal = Math.abs(currentTotal - nextTotal) > 0.02
-      || !intelligence.data?.commercialBreakdown?.materials
+    const stored = intelligence.data?.commercialBreakdown?.materials || 0
+    if (Math.abs(stored - commercialBreakdown.materials) < 0.02) return
 
-    if (!needsHeal) return
-
-    const next = intelligence.recomputePricing({
-      ...intelligence.data,
-      materials: reconciled,
+    intelligence.setData(prev => intelligence.recomputePricing({
+      ...prev,
       commercialBreakdown,
-    })
-    intelligence.setData(next)
-    const payload = projectDataToDocPayload(next, { docType: 'boq', source: 'ai-chat' })
-    if (payload?.materials?.length) {
-      docGen.applyBOQTransfer({ ...payload, source: 'ai-chat' })
-    }
-  }, [chat.msgs.length, intelligence.data?.materials?.length]) // eslint-disable-line react-hooks/exhaustive-deps
+    }))
+  }, [chat.msgs.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const session = useWorkspaceSession({
     tab,

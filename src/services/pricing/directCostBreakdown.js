@@ -207,6 +207,15 @@ function validateCategories(categories, { hasMaterialsArray, hasLaborArray }, wa
  * Compute deduped direct-cost breakdown.
  * @returns {{ categories, directTotal, dedupeNotes, sources, warnings, auditLog }}
  */
+const COMMERCIAL_CATEGORY_KEYS = [
+  'materials',
+  'labour',
+  'earthworks',
+  'filling',
+  'transport',
+  'preliminaries',
+]
+
 export function computeDirectCostBreakdown(input = {}) {
   const {
     boqRows = [],
@@ -214,6 +223,7 @@ export function computeDirectCostBreakdown(input = {}) {
     labor = [],
     equipment = [],
     prelims = [],
+    commercialBreakdown = null,
   } = input
 
   const categories = emptyCategories()
@@ -305,6 +315,17 @@ export function computeDirectCostBreakdown(input = {}) {
   }
 
   validateCategories(categories, { hasMaterialsArray, hasLaborArray }, warnings)
+
+  if (commercialBreakdown) {
+    for (const key of COMMERCIAL_CATEGORY_KEYS) {
+      const value = commercialBreakdown[key]
+      if (value > 0) {
+        categories[key] = value
+        categorySources[key] = 'commercial-summary'
+      }
+    }
+    dedupeNotes.push('Direct cost categories taken from chat commercial summary')
+  }
 
   if (!hasMaterialsArray && categories.other > 0) {
     categories.materials += categories.other

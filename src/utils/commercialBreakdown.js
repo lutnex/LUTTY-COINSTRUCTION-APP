@@ -21,10 +21,14 @@ export function assignCommercialCategory(breakdown, desc = '', amount) {
   if (amt <= 0) return breakdown
   const text = String(desc || '').trim()
   for (const { key, test } of CATEGORY_RULES) {
-    if (test.test(text)) {
+    if (!test.test(text)) continue
+    // Commercial tables may include sub-lines — keep the largest materials total.
+    if (key === 'materials' && breakdown[key] > 0) {
+      breakdown[key] = Math.max(breakdown[key], amt)
+    } else if (breakdown[key] == null) {
       breakdown[key] = amt
-      return breakdown
     }
+    return breakdown
   }
   return breakdown
 }

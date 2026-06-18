@@ -249,11 +249,40 @@ test('mergeExtractIntoProjectData reconciles materials to commercial summary', (
     boqRows: merged.boqItems,
     materials: merged.materials,
     labor: merged.labor,
+    commercialBreakdown: merged.commercialBreakdown,
   })
   assert(Math.abs(breakdown.directTotal - 94201) < 0.02, `expected 94201, got ${breakdown.directTotal}`)
 })
 
-test('reconcileMaterialSchedule trims inflated schedule to commercial materials total', () => {
+test('commercial summary overrides inflated material schedule for pricing', () => {
+  const materials = [
+    { amount: 64552, desc: 'Valid materials', source: 'ai-chat' },
+    { amount: 5065, desc: 'Stale duplicate', source: 'carried-forward' },
+  ]
+  const breakdown = buildApprovalBreakdown({
+    boqRows: [
+      { section: 'Earthworks', desc: 'Excavation', amount: 3600 },
+      { section: 'Filling Works', desc: 'Backfill', amount: 1500 },
+      { section: 'Transport', desc: 'Delivery', amount: 1000 },
+      { section: 'Preliminaries', desc: 'Site setup', amount: 4580 },
+    ],
+    materials,
+    labor: [{ trade: 'Masonry', amount: 18969 }],
+    commercialBreakdown: {
+      materials: 64552,
+      labour: 18969,
+      earthworks: 3600,
+      filling: 1500,
+      transport: 1000,
+      preliminaries: 4580,
+      contractSum: 94201,
+    },
+  })
+  assert(Math.abs(breakdown.categories.materials - 64552) < 0.02)
+  assert(Math.abs(breakdown.directTotal - 94201) < 0.02, `expected 94201, got ${breakdown.directTotal}`)
+})
+
+test('reconcileMaterialSchedule removes stale rows but keeps valid line items', () => {
   const materials = [
     { id: 1, desc: 'Cement and blocks', amount: 64552, source: 'ai-chat' },
     { id: 2, desc: 'Extra roof sheets', amount: 5065, source: 'carried-forward' },

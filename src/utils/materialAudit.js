@@ -98,13 +98,21 @@ export function trimMaterialScheduleToExpected(rows = [], expectedTotal, baselin
 }
 
 export function resolveCommercialBreakdown(intelligence = {}, chatExtract = null) {
-  if (intelligence?.commercialBreakdown?.materials > 0) return intelligence.commercialBreakdown
-  if (chatExtract?.commercialBreakdown?.materials > 0) return chatExtract.commercialBreakdown
-  if (chatExtract?.sourceText) return parseCommercialBreakdown(chatExtract.sourceText)
-  return intelligence?.commercialBreakdown || {}
+  const stored = intelligence?.commercialBreakdown || {}
+  if (chatExtract?.commercialBreakdown?.materials > 0) {
+    return { ...stored, ...chatExtract.commercialBreakdown }
+  }
+  if (chatExtract?.sourceText) {
+    const parsed = parseCommercialBreakdown(chatExtract.sourceText)
+    if (parsed.materials > 0) return { ...stored, ...parsed }
+  }
+  return stored
 }
 
-/** Reconcile material schedule to commercial summary / import baseline. */
+/**
+ * Clean material schedule without deleting valid line items.
+ * Pricing totals come from commercialBreakdown — not by trimming rows.
+ */
 export function reconcileMaterialSchedule(
   rows = [],
   { commercialBreakdown = {}, importBaseline = null, freshImport = false } = {},
@@ -116,12 +124,7 @@ export function reconcileMaterialSchedule(
   let materials = dedupeMaterialRows(rows || [])
   if (!expectedTotal || expectedTotal <= 0) return materials
 
-  materials = sanitizeMaterialSchedule(materials, expectedTotal, { freshImport }).materials
-  return trimMaterialScheduleToExpected(
-    materials,
-    expectedTotal,
-    importBaseline?.materials || [],
-  )
+  return sanitizeMaterialSchedule(materials, expectedTotal, { freshImport }).materials
 }
 
 function resolveCommercialFromExtract(extract) {

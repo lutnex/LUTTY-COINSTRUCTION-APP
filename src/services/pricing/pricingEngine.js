@@ -39,6 +39,7 @@ export function computePricing(input = {}) {
     equipment = [],
     prelims = [],
     financialAdjustments: rawAdjustments,
+    commercialBreakdown = null,
   } = input
 
   const financialAdjustments = rawAdjustments && typeof rawAdjustments === 'object'
@@ -51,6 +52,7 @@ export function computePricing(input = {}) {
     labor,
     equipment,
     prelims,
+    commercialBreakdown,
   })
 
   const { categories, directTotal, dedupeNotes, warnings } = breakdown
