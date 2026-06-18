@@ -14,6 +14,7 @@ import {
   APPROVAL_MODES,
   ESTIMATE_MISMATCH_MESSAGE,
 } from '../src/utils/projectEstimate.js'
+import { buildApprovalBreakdown } from '../src/services/pricing/directCostBreakdown.js'
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -120,6 +121,56 @@ test('resolveProjectEstimate prefers locked snapshot when stores desync', () => 
   assert(resolved.locked === true)
   assert(resolved.approvedTotal === locked.approvedTotal)
   assert(isEstimateLocked(unlocked, locked) === true)
+})
+
+test('chat import does not double-count labour in unified BOQ and labor array', () => {
+  const boqRows = [
+    { section: 'Earthworks', amount: 3600 },
+    { section: 'Filling Works', amount: 1500 },
+    { section: 'Transport', amount: 1000 },
+    { section: 'Preliminaries', amount: 4580 },
+  ]
+  const materials = [{ amount: 64552, desc: 'Materials' }]
+  const labor = [{ amount: 18969, trade: 'Masonry' }]
+  const unifiedBoq = [
+    ...boqRows,
+    { section: 'Materials', amount: 64552 },
+    { section: 'Labour — Masonry', amount: 18969 },
+  ]
+  const breakdown = buildApprovalBreakdown({ boqRows: unifiedBoq, materials, labor })
+  assert(Math.abs(breakdown.directTotal - 94201) < 0.02, `expected 94201, got ${breakdown.directTotal}`)
+  const estimate = buildProjectEstimate({ boqRows: unifiedBoq, materials, labor })
+  assert(Math.abs(estimate.directCostTotal - 94201) < 0.02, `estimate expected 94201, got ${estimate.directCostTotal}`)
+})
+
+test('raw BOQ + parallel arrays match chat contract sum', () => {
+  const input = {
+    boqRows: [
+      { section: 'Earthworks', amount: 3600 },
+      { section: 'Filling Works', amount: 1500 },
+      { section: 'Transport', amount: 1000 },
+      { section: 'Preliminaries & Contingency', amount: 4580 },
+    ],
+    materials: [{ amount: 64552 }],
+    labor: [{ amount: 18969 }],
+  }
+  const breakdown = buildApprovalBreakdown(input)
+  assert(Math.abs(breakdown.directTotal - 94201) < 0.02, `expected 94201, got ${breakdown.directTotal}`)
+  assert(Math.abs(breakdown.categories.materials - 64552) < 0.02)
+  assert(Math.abs(breakdown.categories.labour - 18969) < 0.02)
+})
+
+test('stale docGen prelims are not added when BOQ already contains preliminaries', () => {
+  const input = {
+    boqRows: [
+      { section: 'Preliminaries', amount: 4580 },
+      { section: 'Materials', amount: 1000 },
+    ],
+    materials: [{ amount: 1000 }],
+    prelims: [{ amount: 4580, desc: 'Stale duplicate' }],
+  }
+  const breakdown = buildApprovalBreakdown(input)
+  assert(Math.abs(breakdown.directTotal - 5580) < 0.02, `expected 5580 not double prelims, got ${breakdown.directTotal}`)
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

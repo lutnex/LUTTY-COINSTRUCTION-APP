@@ -2,6 +2,7 @@ import { today } from './formatters.js'
 import { safeLocalStorageSetItem, safeParseJson } from './safeSerialize.js'
 import { normalizeBoqRow } from './boqItemFactory.js'
 import { computePricing } from '../services/pricing/pricingEngine.js'
+import { pricingInputFromConsolidated } from '../services/pricing/directCostBreakdown.js'
 import { buildProjectEstimate, ESTIMATE_SOURCES } from './projectEstimate.js'
 import { resolveInitialPaymentTerms, normalizePaymentTerms } from './paymentTerms.js'
 import { normalizeMaterialState } from './materialCategories.js'
@@ -82,9 +83,7 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
   }
 
   const pricingInput = {
-    boqRows: dedupe,
-    materials: consolidated.materials?.length ? consolidated.materials : base.materials,
-    labor: consolidated.labor?.length ? consolidated.labor : base.labor,
+    ...pricingInputFromConsolidated(consolidated, base),
     financialAdjustments: base.financialAdjustments ?? undefined,
   }
 

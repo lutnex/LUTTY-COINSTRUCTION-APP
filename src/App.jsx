@@ -75,6 +75,7 @@ import { loadAllPriceProfiles, persistPriceProfiles } from './services/priceProf
 import { fetchMaterialPrices } from './services/materialPricesService.js'
 import { saveAppSession, loadAppSession, clearAppSession } from './utils/sessionStore.js'
 import { downloadPDF, printDocument, buildDocumentHTML } from './services/ai/pdfEngine.js'
+import { buildApprovalBreakdown } from './services/pricing/directCostBreakdown.js'
 import EstimateApprovalDialog from './components/shared/EstimateApprovalDialog.jsx'
 import {
   lockProjectEstimate,
@@ -432,13 +433,23 @@ function AppShellInner({ projState, dispatch }) {
     }, projectEstimate)
   }, [docGen, companyLogo, risks, proc, intelligence.data])
 
-  const getEstimateInput = useCallback(() => ({
-    boqRows: intelligence.data?.boqItems?.length ? intelligence.data.boqItems : docGen.boqRows,
-    materials: intelligence.data?.materials?.length ? intelligence.data.materials : docGen.mats,
-    labor: intelligence.data?.labor?.length ? intelligence.data.labor : docGen.labor,
-    prelims: docGen.prelims,
-    financialAdjustments: docGen.financialAdjustments,
-  }), [intelligence.data, docGen])
+  const getEstimateInput = useCallback(() => {
+    const intel = intelligence.data
+    const hasIntelBoq = intel?.boqItems?.length > 0
+    return {
+      boqRows: hasIntelBoq ? intel.boqItems : docGen.boqRows,
+      materials: intel?.materials?.length ? intel.materials : docGen.mats,
+      labor: intel?.labor?.length ? intel.labor : docGen.labor,
+      prelims: intel?.prelims?.length ? intel.prelims : (hasIntelBoq ? [] : (docGen.prelims || [])),
+      equipment: intel?.equipment?.length ? intel.equipment : (docGen.equipment || []),
+      financialAdjustments: docGen.financialAdjustments,
+    }
+  }, [intelligence.data, docGen])
+
+  const estimateApprovalBreakdown = useMemo(() => {
+    if (!estimateApprovalOpen) return null
+    return buildApprovalBreakdown(estimateApprovalInput ?? getEstimateInput())
+  }, [estimateApprovalOpen, estimateApprovalInput, getEstimateInput])
 
   const syncLockedEstimate = useCallback((locked) => {
     if (!locked?.locked) return
@@ -1858,12 +1869,8 @@ function AppShellInner({ projState, dispatch }) {
         open={estimateApprovalOpen}
         onClose={cancelEstimateApproval}
         onConfirm={handleEstimateApprovalConfirm}
-        directCostTotal={
-          intelligence.data?.pricing?.layers?.projectSubtotal
-          ?? intelligence.data?.projectEstimate?.directCostTotal
-          ?? docGen.totals?.projectSubtotal
-          ?? 0
-        }
+        directCostTotal={estimateApprovalBreakdown?.directTotal ?? 0}
+        breakdown={estimateApprovalBreakdown}
       />
     </div>
   )

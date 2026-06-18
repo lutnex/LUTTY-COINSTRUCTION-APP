@@ -2,10 +2,11 @@ import { useState } from 'react'
 import { C } from '../../utils/constants.js'
 import { Button } from './Button.jsx'
 import { APPROVAL_MODES } from '../../utils/projectEstimate.js'
+import { BREAKDOWN_LABELS } from '../../services/pricing/directCostBreakdown.js'
 import { fmtN } from '../../utils/formatters.js'
 
 const MODE_OPTIONS = [
-  { id: APPROVAL_MODES.DIRECT_ONLY, label: 'Direct Cost Only', desc: 'Materials + Labour + Transport only. No commercials added.' },
+  { id: APPROVAL_MODES.DIRECT_ONLY, label: 'Direct Cost Only', desc: 'Sum of imported BOQ values only. No hidden commercials.' },
   { id: APPROVAL_MODES.PRELIMINARIES, label: 'Add Preliminaries', desc: 'Include explicit preliminaries already in the estimate.' },
   { id: APPROVAL_MODES.OVERHEADS, label: 'Add Overheads', desc: 'Apply contractor overheads percentage on subtotal.' },
   { id: APPROVAL_MODES.PROFIT, label: 'Add Profit', desc: 'Apply contractor profit percentage on subtotal.' },
@@ -13,11 +14,17 @@ const MODE_OPTIONS = [
   { id: APPROVAL_MODES.CUSTOM, label: 'Custom %', desc: 'Set custom percentages for each commercial item.' },
 ]
 
+const DISPLAY_KEYS = [
+  'materials', 'labour', 'earthworks', 'filling', 'transport',
+  'preliminaries', 'overheads', 'profit', 'contingency', 'equipment', 'other',
+]
+
 export default function EstimateApprovalDialog({
   open,
   onClose,
   onConfirm,
   directCostTotal = 0,
+  breakdown = null,
   title = 'Approve Estimate',
   subtitle = 'Use Direct Cost Only or Include Commercials?',
 }) {
@@ -30,6 +37,11 @@ export default function EstimateApprovalDialog({
   })
 
   if (!open) return null
+
+  const categories = breakdown?.categories || {}
+  const formula = breakdown?.formula
+  const dedupeNotes = breakdown?.dedupeNotes || []
+  const displayTotal = breakdown?.directTotal ?? directCostTotal
 
   const toggleMode = (mode) => {
     if (mode === APPROVAL_MODES.DIRECT_ONLY) {
@@ -64,7 +76,7 @@ export default function EstimateApprovalDialog({
     }}>
       <div style={{
         background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12,
-        padding: 24, width: 540, maxWidth: '94vw', maxHeight: '90vh', overflowY: 'auto',
+        padding: 24, width: 580, maxWidth: '94vw', maxHeight: '90vh', overflowY: 'auto',
       }}>
         <div style={{ fontFamily: "'Bebas Neue'", fontSize: 22, color: C.amber, letterSpacing: '1.5px', marginBottom: 4 }}>
           {title}
@@ -72,12 +84,48 @@ export default function EstimateApprovalDialog({
         <div style={{ fontSize: 12, color: C.textDim, marginBottom: 8 }}>{subtitle}</div>
         <div style={{
           background: C.carbon, border: `1px solid ${C.border}`, borderRadius: 8,
-          padding: '10px 14px', marginBottom: 16, display: 'flex', justifyContent: 'space-between',
+          padding: '10px 14px', marginBottom: 12, display: 'flex', justifyContent: 'space-between',
         }}>
           <span style={{ fontSize: 12, color: C.textDim }}>Current Direct Cost</span>
           <span style={{ fontFamily: "'IBM Plex Mono'", color: C.amber, fontWeight: 600 }}>
-            GHS {fmtN(directCostTotal)}
+            GHS {fmtN(displayTotal)}
           </span>
+        </div>
+
+        <div style={{
+          background: C.carbon, border: `1px solid ${C.border}`, borderRadius: 8,
+          padding: '12px 14px', marginBottom: 16,
+        }}>
+          <div style={{ fontSize: 11, color: C.textDim, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+            Cost Breakdown (Debug)
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {DISPLAY_KEYS.map(key => (
+              <div key={key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                <span style={{ color: C.textDim }}>{BREAKDOWN_LABELS[key]}</span>
+                <span style={{ fontFamily: "'IBM Plex Mono'", color: categories[key] > 0 ? C.text : C.textFaint }}>
+                  GHS {fmtN(categories[key] || 0)}
+                </span>
+              </div>
+            ))}
+          </div>
+          {formula?.expression && (
+            <div style={{
+              marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.border}`,
+              fontSize: 11, color: C.textDim, lineHeight: 1.5, fontFamily: "'IBM Plex Mono'",
+            }}>
+              <div style={{ marginBottom: 4, color: C.textFaint }}>Formula</div>
+              <div>{formula.expression}</div>
+              <div style={{ marginTop: 6, color: C.amber }}>= GHS {fmtN(formula.total ?? displayTotal)}</div>
+            </div>
+          )}
+          {dedupeNotes.length > 0 && (
+            <div style={{ marginTop: 10, fontSize: 10, color: C.textFaint, lineHeight: 1.4 }}>
+              {dedupeNotes.map((note, i) => (
+                <div key={i}>• {note}</div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
