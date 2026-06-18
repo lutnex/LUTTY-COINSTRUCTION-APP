@@ -786,6 +786,7 @@ export function useDocGen(estimatePreferences = null) {
       pricing,
       projectEstimate,
       financialAdjustments,
+      commercialBreakdown: projectEstimate?.commercialBreakdownSnapshot ?? null,
       contractSum: projectEstimate?.locked
         ? projectEstimate.approvedTotal
         : (vSummary?.revisedTotal ?? pricing.layers.finalEstimate),

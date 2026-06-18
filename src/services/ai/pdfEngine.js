@@ -96,10 +96,10 @@ function computeTotals(data) {
   if (data.projectEstimate?.locked && data.projectEstimate.pricingSnapshot) {
     const p = data.projectEstimate.pricingSnapshot
     return {
-      matTotal: data.projectEstimate.materials?.total || 0,
+      matTotal: p.summary?.mat ?? p.layers?.materials ?? data.projectEstimate.materials?.total ?? 0,
       boqTotal: (data.boqRows || []).reduce((s, r) => s + (r.clientSupplied ? 0 : parseFloat(r.amount) || 0), 0),
-      labTotal: data.projectEstimate.labour?.total || 0,
-      preTotal: data.projectEstimate.preliminaries?.total || 0,
+      labTotal: p.summary?.labour ?? p.layers?.labour ?? data.projectEstimate.labour?.total ?? 0,
+      preTotal: p.summary?.prelims ?? p.layers?.prelimExplicit ?? data.projectEstimate.preliminaries?.total ?? 0,
       works: p.layers.rawWorks || p.summary.sub,
       grand: data.projectEstimate.approvedTotal,
       audit: p.audit || [],
@@ -110,15 +110,19 @@ function computeTotals(data) {
   if (data.pricing?.layers?.finalEstimate != null) {
     const p = data.pricing
     return {
-      matTotal: (data.materials || []).reduce((s, r) => s + (r.clientSupply ? 0 : parseFloat(r.amount) || 0), 0),
+      matTotal: p.summary?.mat ?? p.layers?.materials ?? (data.materials || []).reduce((s, r) => s + (r.clientSupply ? 0 : parseFloat(r.amount) || 0), 0),
       boqTotal: (data.boqRows || []).reduce((s, r) => s + (r.clientSupplied ? 0 : parseFloat(r.amount) || 0), 0),
-      labTotal: (data.labor || []).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0),
-      preTotal: (data.prelims || []).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0),
+      labTotal: p.summary?.labour ?? p.layers?.labour ?? (data.labor || []).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0),
+      preTotal: p.summary?.prelims ?? p.layers?.prelimExplicit ?? (data.prelims || []).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0),
       works: p.layers.rawWorks || p.summary.sub,
       grand: p.layers.finalEstimate,
       audit: p.audit || [],
     }
   }
+
+  const commercialBreakdown = data.commercialBreakdown
+    ?? data.projectEstimate?.commercialBreakdownSnapshot
+    ?? null
 
   const pricing = computePricing({
     boqRows: data.boqRows,
@@ -126,6 +130,7 @@ function computeTotals(data) {
     labor: data.labor,
     prelims: data.prelims,
     financialAdjustments: data.financialAdjustments ?? undefined,
+    commercialBreakdown,
   })
 
   return {

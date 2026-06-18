@@ -39,6 +39,18 @@ function sumCategory(rows = [], { excludeClientSupply = true } = {}) {
   return { items: rows, total }
 }
 
+function pricingInputFromEstimateInput(input = {}, financialAdjustments = null) {
+  return {
+    boqRows: input.boqRows ?? [],
+    materials: input.materials ?? [],
+    labor: input.labor ?? input.labour ?? [],
+    equipment: input.equipment ?? [],
+    prelims: input.prelims ?? input.preliminaries?.items ?? [],
+    financialAdjustments: financialAdjustments ?? input.financialAdjustments ?? createDefaultFinancialAdjustments(),
+    commercialBreakdown: input.commercialBreakdown ?? null,
+  }
+}
+
 /**
  * @param {object} input
  * @param {string} [input.source]
@@ -51,6 +63,7 @@ export function buildProjectEstimate(input = {}) {
     equipment = [],
     prelims = [],
     financialAdjustments,
+    commercialBreakdown = null,
     source = ESTIMATE_SOURCES.AI_CHAT,
   } = input
 
@@ -61,11 +74,14 @@ export function buildProjectEstimate(input = {}) {
     equipment,
     prelims,
     financialAdjustments: financialAdjustments ?? createDefaultFinancialAdjustments(),
+    commercialBreakdown,
   })
 
   const matRows = materials.length ? materials : boqRows
   const materialsCat = sumCategory(matRows)
+  materialsCat.total = pricing.summary?.mat ?? pricing.layers?.materials ?? materialsCat.total
   const labourCat = sumCategory(labor, { excludeClientSupply: false })
+  labourCat.total = pricing.summary?.labour ?? pricing.layers?.labour ?? labourCat.total
   const transportCat = sumCategory(equipment, { excludeClientSupply: false })
   const prelimCat = {
     items: (prelims || []).filter(p => !p.isFinancialAdjustment),
@@ -187,19 +203,13 @@ export function lockProjectEstimate(estimate, approval, input = {}) {
     input.financialAdjustments ?? estimate.financialAdjustmentsSnapshot,
   )
 
-  const pricing = computePricing({
-    boqRows: input.boqRows ?? [],
-    materials: input.materials ?? [],
-    labor: input.labor ?? input.labour ?? [],
-    equipment: input.equipment ?? [],
-    prelims: input.prelims ?? input.preliminaries?.items ?? [],
-    financialAdjustments,
-  })
+  const pricing = computePricing(pricingInputFromEstimateInput(input, financialAdjustments))
 
   const modes = Array.isArray(approval.modes) ? approval.modes : [approval.mode || APPROVAL_MODES.DIRECT_ONLY]
   const locked = buildProjectEstimate({
     ...input,
     financialAdjustments,
+    commercialBreakdown: input.commercialBreakdown,
     source: approval.source || estimate?.materials?.source || ESTIMATE_SOURCES.USER_OVERRIDE,
   })
 
@@ -213,6 +223,7 @@ export function lockProjectEstimate(estimate, approval, input = {}) {
     directCostTotal: pricing.layers.projectSubtotal,
     pricingSnapshot: pricing,
     financialAdjustmentsSnapshot: financialAdjustments,
+    commercialBreakdownSnapshot: input.commercialBreakdown || null,
   }
 }
 
@@ -238,6 +249,7 @@ export function unlockProjectEstimate(lockedEstimate, input = {}) {
     equipment: input.equipment ?? [],
     prelims: input.prelims ?? input.preliminaries?.items ?? [],
     financialAdjustments,
+    commercialBreakdown: input.commercialBreakdown ?? lockedEstimate.commercialBreakdownSnapshot,
     source,
   })
 
@@ -399,6 +411,7 @@ export function enrichExportWithEstimate(data, projectEstimate) {
     projectEstimate,
     pricing: projectEstimate.pricingSnapshot,
     contractSum: projectEstimate.approvedTotal,
+    commercialBreakdown: data.commercialBreakdown ?? projectEstimate.commercialBreakdownSnapshot ?? null,
     _moduleTotals: totals,
   }
 }
@@ -410,6 +423,7 @@ export function estimateInputFromSnapshot(snapshot = {}) {
     labor: snapshot.labor || [],
     prelims: snapshot.prelims || [],
     financialAdjustments: snapshot.financialAdjustments,
+    commercialBreakdown: snapshot.commercialBreakdown || snapshot.commercialBreakdownSnapshot || null,
   }
 }
 

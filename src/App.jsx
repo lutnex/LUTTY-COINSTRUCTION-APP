@@ -572,11 +572,11 @@ function AppShellInner({ projState, dispatch }) {
   }, [intelligence.data, docGen, chat.msgs])
 
   const lockEstimateEverywhere = useCallback((approval, inputOverride = null) => {
-    const { input } = getReconciledEstimateInput(inputOverride ?? estimateApprovalInput)
+    const { input, commercialBreakdown } = getReconciledEstimateInput(inputOverride ?? estimateApprovalInput)
     const locked = lockProjectEstimate(
       resolveProjectEstimate(docGen.projectEstimate, intelligence.data?.projectEstimate) || {},
       { ...approval, source: estimateApprovalSource },
-      input,
+      { ...input, commercialBreakdown },
     )
     syncLockedEstimate(locked)
     return locked

@@ -295,6 +295,33 @@ test('reconcileMaterialSchedule removes stale rows but keeps valid line items', 
   assert(reconciled.length === 1, 'stale row should be removed')
 })
 
+test('locked estimate uses commercial summary in pricing snapshot for PDF export', () => {
+  const input = {
+    boqRows: [
+      { section: 'Earthworks', desc: 'Excavation', amount: 3600 },
+      { section: 'Filling Works', desc: 'Backfill', amount: 1500 },
+      { section: 'Transport', desc: 'Delivery', amount: 1000 },
+      { section: 'Preliminaries', desc: 'Site setup', amount: 4580 },
+    ],
+    materials: [{ amount: 69617, desc: 'Inflated schedule total', source: 'ai-chat' }],
+    labor: [{ trade: 'Masonry', amount: 18969 }],
+    commercialBreakdown: {
+      materials: 64552,
+      labour: 18969,
+      earthworks: 3600,
+      filling: 1500,
+      transport: 1000,
+      preliminaries: 4580,
+      contractSum: 94201,
+    },
+  }
+  const locked = lockProjectEstimate({}, { modes: [APPROVAL_MODES.DIRECT_ONLY] }, input)
+  assert(locked.locked === true)
+  assert(Math.abs(locked.approvedTotal - 94201) < 0.02, `expected 94201, got ${locked.approvedTotal}`)
+  assert(Math.abs(locked.pricingSnapshot.summary.sub - 94201) < 0.02)
+  assert(Math.abs(locked.pricingSnapshot.summary.mat - 64552) < 0.02)
+})
+
 test('material audit detects duplicate imported rows', () => {
   const baseline = buildImportBaselineFromExtract({
     materials: [{ desc: 'Cement bags', unit: 'bag', qty: '50', rate: '100', amount: 5000 }],
