@@ -10,6 +10,7 @@ import {
 import { computePricing } from '../services/pricing/pricingEngine.js'
 import { buildProjectEstimate, lockProjectEstimate, ESTIMATE_SOURCES } from '../utils/projectEstimate.js'
 import { normalizeBoqRow } from '../utils/boqItemFactory.js'
+import { reconcileMaterialSchedule } from '../utils/materialAudit.js'
 
 const ProjectIntelligenceContext = createContext(null)
 
@@ -25,9 +26,13 @@ export function ProjectIntelligenceProvider({ children, activeProject }) {
         financialAdjustments: d.projectEstimate.financialAdjustmentsSnapshot ?? d.financialAdjustments,
       }
     }
+    const materials = reconcileMaterialSchedule(d.materials, {
+      commercialBreakdown: d.commercialBreakdown,
+      importBaseline: d.importBaseline,
+    })
     const pricingInput = {
       boqRows: d.boqItems,
-      materials: d.materials,
+      materials,
       labor: d.labor,
       prelims: d.prelims,
       financialAdjustments: d.financialAdjustments,
@@ -37,7 +42,7 @@ export function ProjectIntelligenceProvider({ children, activeProject }) {
       ...pricingInput,
       source: d.metadata?.source === 'boq-builder' ? ESTIMATE_SOURCES.BOQ_BUILDER : ESTIMATE_SOURCES.AI_CHAT,
     })
-    return { ...d, pricing, projectEstimate }
+    return { ...d, materials, pricing, projectEstimate }
   }, [])
 
   const approveAndLockEstimate = useCallback((approval) => {

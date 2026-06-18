@@ -15,7 +15,8 @@ import {
   ESTIMATE_MISMATCH_MESSAGE,
 } from '../src/utils/projectEstimate.js'
 import { buildApprovalBreakdown } from '../src/services/pricing/directCostBreakdown.js'
-import { buildMaterialAudit, buildImportBaselineFromExtract } from '../src/utils/materialAudit.js'
+import { buildMaterialAudit, buildImportBaselineFromExtract, reconcileMaterialSchedule } from '../src/utils/materialAudit.js'
+import { mergeExtractIntoProjectData, emptyProjectData } from '../src/utils/projectIntelligence.js'
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -223,6 +224,46 @@ test('material audit flags extra rows causing schedule difference', () => {
   assert(Math.abs(audit.difference - 5065) < 0.02, `expected diff 5065, got ${audit.difference}`)
   assert(audit.flaggedRows.some(r => r.flags.includes('extra')), 'should flag extra row')
   assert(Math.abs(audit.flaggedDeltaSum - 5065) < 0.02)
+})
+
+test('mergeExtractIntoProjectData reconciles materials to commercial summary', () => {
+  const stale = emptyProjectData()
+  stale.materials = [
+    { id: 1, desc: 'Roof sheets', qty: 10, rate: 506.5, amount: 5065, source: 'carried-forward' },
+    { id: 2, desc: 'Cement bags', qty: 100, rate: 645.52, amount: 64552, source: 'ai-chat' },
+  ]
+  const merged = mergeExtractIntoProjectData(stale, {
+    hasBOQ: true,
+    materials: stale.materials,
+    commercialBreakdown: { materials: 64552, labour: 18969, contractSum: 94201 },
+    boqRows: [
+      { section: 'Earthworks', desc: 'Bulk excavation', amount: 3600 },
+      { section: 'Filling Works', desc: 'Backfill', amount: 1500 },
+      { section: 'Transport', desc: 'Delivery', amount: 1000 },
+      { section: 'Preliminaries', desc: 'Site setup', amount: 4580 },
+    ],
+    labor: [{ trade: 'Masonry', desc: 'Blockwork', amount: 18969 }],
+  }, { replaceBoq: true })
+  assert(Math.abs(merged.materials.reduce((s, m) => s + (parseFloat(m.amount) || 0), 0) - 64552) < 0.02)
+  const breakdown = buildApprovalBreakdown({
+    boqRows: merged.boqItems,
+    materials: merged.materials,
+    labor: merged.labor,
+  })
+  assert(Math.abs(breakdown.directTotal - 94201) < 0.02, `expected 94201, got ${breakdown.directTotal}`)
+})
+
+test('reconcileMaterialSchedule trims inflated schedule to commercial materials total', () => {
+  const materials = [
+    { id: 1, desc: 'Cement and blocks', amount: 64552, source: 'ai-chat' },
+    { id: 2, desc: 'Extra roof sheets', amount: 5065, source: 'carried-forward' },
+  ]
+  const reconciled = reconcileMaterialSchedule(materials, {
+    commercialBreakdown: { materials: 64552 },
+  })
+  const total = reconciled.reduce((s, m) => s + (parseFloat(m.amount) || 0), 0)
+  assert(Math.abs(total - 64552) < 0.02, `expected 64552, got ${total}`)
+  assert(reconciled.length === 1, 'stale row should be removed')
 })
 
 test('material audit detects duplicate imported rows', () => {

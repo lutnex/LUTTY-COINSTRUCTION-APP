@@ -159,6 +159,34 @@ export function materialsGrandTotal(materials = []) {
   return categorySubtotal(materials)
 }
 
+export function materialRowAmount(row = {}) {
+  if (row.clientSupply || row.clientSupplied) return 0
+  const amt = parseFloat(row.amount)
+  if (Number.isFinite(amt) && amt !== 0) return amt
+  const qty = parseFloat(row.qty)
+  const rate = parseFloat(row.rate)
+  if (Number.isFinite(qty) && Number.isFinite(rate)) return Math.round(qty * rate * 100) / 100
+  return 0
+}
+
+export function normalizeMaterialItemKey(row = {}) {
+  const desc = String(row.desc || row.material || '').trim().toLowerCase().replace(/\s+/g, ' ')
+  const unit = String(row.unit || '').trim().toLowerCase()
+  return `${desc}|${unit}`
+}
+
+export function dedupeMaterialRows(rows = []) {
+  const out = []
+  const seen = new Set()
+  for (const row of rows) {
+    const key = `${normalizeMaterialItemKey(row)}|${materialRowAmount(row)}|${row.qty}|${row.rate}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(row)
+  }
+  return out
+}
+
 export function reorderList(list, fromIndex, toIndex) {
   if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= list.length || toIndex >= list.length) {
     return list

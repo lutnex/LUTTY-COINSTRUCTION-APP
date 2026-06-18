@@ -11,6 +11,7 @@ import {
   getSectionTitleBefore,
   isCommercialSummaryRow,
 } from '../../utils/chatExtract.js'
+import { parseCommercialBreakdown, assignCommercialCategory } from '../../utils/commercialBreakdown.js'
 
 function parseTableRows(tableBlock, defaultSection = 'General', { kind = 'boq', sectionTitle = '' } = {}) {
   const rows = []
@@ -139,6 +140,7 @@ export function parseAIResponse(text) {
   const materials = []
   const labor = []
   const risks = []
+  const commercialRows = []
   let contractSum = null
   let projectTitle = null
   let projectScope = null
@@ -176,7 +178,8 @@ export function parseAIResponse(text) {
     const tableKind = classifyTableSection(sectionTitle, tm[1])
 
     if (tableKind === 'commercial') {
-      // Totals only — do not import as line items
+      const rows = parseTableRows(block, currentBill, { kind: 'commercial', sectionTitle })
+      commercialRows.push(...rows)
       continue
     }
 
@@ -248,6 +251,8 @@ export function parseAIResponse(text) {
 
   const { takeoffNotes, assumptions, exclusions, provisional } = extractSectionBlocks(text)
   const collections = extractCollections(text)
+  const commercialBreakdown = parseCommercialBreakdown(text, commercialRows)
+  if (contractSum && !commercialBreakdown.contractSum) commercialBreakdown.contractSum = contractSum
 
   const hasEstimate = Boolean(contractSum) || /contract\s+sum|estimate\s+total/i.test(text)
   const hasBOQ = boqRows.length > 2 || materials.length > 2 || labor.length > 1
@@ -289,7 +294,8 @@ export function parseAIResponse(text) {
     exclusions,
     provisional,
     takeoffNotes,
-    contractSum,
+    contractSum: commercialBreakdown.contractSum || contractSum,
+    commercialBreakdown,
     projectTitle,
     projectScope,
     hasEstimate,
@@ -312,6 +318,7 @@ function emptyResult() {
     boqRows: [], materials: [], matCategories: [], labor: [], risks: [], collections: [],
     assumptions: [], exclusions: [], provisional: [], takeoffNotes: '',
     contractSum: null, projectTitle: null, projectScope: null,
+    commercialBreakdown: {},
     hasEstimate: false, hasBOQ: false, hasRisks: false, confidence: 'low',
     workflowPhase: null, requiresApproval: false, userApprovedPricing: false,
     agreedPrices: [], hasAgreedPrices: false,

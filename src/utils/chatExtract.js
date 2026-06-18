@@ -4,6 +4,7 @@
 
 import { normalizeBoqRow } from './boqItemFactory.js'
 import { normalizeMaterialState } from './materialCategories.js'
+import { dedupeMaterialRows } from './materialCategories.js'
 
 /** Rows that are totals/subtotals — not importable line items. */
 export function isCommercialSummaryRow(desc = '', { sectionKind } = {}) {
@@ -89,6 +90,8 @@ export function consolidateExtractForImport(extract = {}) {
     extract.matCategories || [],
   )
 
+  const dedupedMaterials = dedupeMaterialRows(materials)
+
   const labor = laborRaw.map((l, i) => ({
     ...l,
     id: l.id ?? Date.now() + i + 5000,
@@ -98,13 +101,13 @@ export function consolidateExtractForImport(extract = {}) {
 
   const unified = dedupeLineItems([
     ...boqRows,
-    ...materials.map((m, i) => materialToBoqRow(m, boqRows.length + i)),
-    ...labor.map((l, i) => laborToBoqRow(l, boqRows.length + materials.length + i)),
+    ...dedupedMaterials.map((m, i) => materialToBoqRow(m, boqRows.length + i)),
+    ...labor.map((l, i) => laborToBoqRow(l, boqRows.length + dedupedMaterials.length + i)),
   ])
 
   const counts = {
     boq: boqRows.length,
-    materials: materials.length,
+    materials: dedupedMaterials.length,
     labor: labor.length,
     total: unified.length,
   }
@@ -116,7 +119,7 @@ export function consolidateExtractForImport(extract = {}) {
   return {
     ...extract,
     boqRows,
-    materials,
+    materials: dedupedMaterials,
     matCategories: categories,
     labor,
     boqItems: unified,

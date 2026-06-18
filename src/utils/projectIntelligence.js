@@ -7,7 +7,8 @@ import { buildProjectEstimate, ESTIMATE_SOURCES } from './projectEstimate.js'
 import { resolveInitialPaymentTerms, normalizePaymentTerms } from './paymentTerms.js'
 import { normalizeMaterialState } from './materialCategories.js'
 import { consolidateExtractForImport } from './chatExtract.js'
-import { buildImportBaselineFromExtract } from './materialAudit.js'
+import { buildImportBaselineFromExtract, reconcileMaterialSchedule } from './materialAudit.js'
+import { dedupeMaterialRows } from './materialCategories.js'
 
 export const INTELLIGENCE_STORAGE_KEY = 'constructiq-project-intelligence'
 
@@ -44,6 +45,7 @@ export function emptyProjectData() {
     financialAdjustments: null,
     projectEstimate: null,
     importBaseline: null,
+    commercialBreakdown: {},
     metadata: { source: null, updatedAt: null, version: 1 },
   }
 }
@@ -53,14 +55,20 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
   const base = prev ? { ...prev } : emptyProjectData()
   if (!extract) return base
 
+  const shouldReplace = replaceBoq || Boolean(extract?.hasBOQ || extract?.hasEstimate)
+
   const source = {
     ...extract,
     boqRows: extract.boqRows?.length
       ? extract.boqRows
-      : (replaceBoq ? [] : (base.boqItems || [])),
-    materials: extract.materials?.length ? extract.materials : (base.materials || []),
-    matCategories: extract.matCategories?.length ? extract.matCategories : (base.matCategories || []),
-    labor: extract.labor?.length ? extract.labor : (base.labor || []),
+      : (shouldReplace ? [] : (base.boqItems || [])),
+    materials: extract.materials?.length
+      ? extract.materials
+      : (shouldReplace ? [] : (base.materials || [])),
+    matCategories: extract.matCategories?.length
+      ? extract.matCategories
+      : (shouldReplace ? [] : (base.matCategories || [])),
+    labor: extract.labor?.length ? extract.labor : (shouldReplace ? [] : base.labor),
     assumptions: extract.assumptions?.length ? extract.assumptions : (base.assumptions || []),
     exclusions: extract.exclusions?.length ? extract.exclusions : (base.exclusions || []),
     provisional: extract.provisional?.length ? extract.provisional : (base.provisional || []),
@@ -72,7 +80,7 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
     : (consolidated.boqRows || []).map((r, i) => normalizeBoqRow({ ...r, source: 'ai' }, i))
 
   const baseItems = Array.isArray(base.boqItems) ? base.boqItems : []
-  const boqItems = (replaceBoq ? incomingRows : [...baseItems, ...incomingRows])
+  const boqItems = (shouldReplace ? incomingRows : [...baseItems, ...incomingRows])
     .map((r, i) => normalizeBoqRow({ ...r, source: r.source || 'ai' }, i))
 
   const dedupe = []
@@ -84,8 +92,24 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
     dedupe.push(r)
   }
 
+  const resolvedMaterials = consolidated.materials?.length
+    ? consolidated.materials
+    : (shouldReplace ? [] : base.materials)
+  let materials = dedupeMaterialRows(resolvedMaterials || []).map(m => ({
+    ...m,
+    source: m.source || (consolidated.materials?.length ? 'ai-chat' : 'carried-forward'),
+  }))
+
+  const commercialBreakdown = extract.commercialBreakdown || base.commercialBreakdown || {}
+  materials = reconcileMaterialSchedule(materials, {
+    commercialBreakdown,
+    importBaseline: shouldReplace ? null : base.importBaseline,
+    freshImport: shouldReplace,
+  })
+
   const pricingInput = {
     ...pricingInputFromConsolidated(consolidated, base),
+    materials,
     financialAdjustments: base.financialAdjustments ?? undefined,
   }
 
@@ -102,18 +126,10 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
   if (extract.exclusions?.length) notesParts.push('EXCLUSIONS:\n' + extract.exclusions.join('\n'))
   if (extract.takeoffNotes) notesParts.push('DRAWING TAKEOFF:\n' + extract.takeoffNotes)
 
-  const resolvedMaterials = consolidated.materials?.length
-    ? consolidated.materials
-    : base.materials
-  const materials = (resolvedMaterials || []).map(m => ({
-    ...m,
-    source: m.source || (consolidated.materials?.length ? 'ai-chat' : 'carried-forward'),
-  }))
-
-  const nextBaseline = buildImportBaselineFromExtract(extract)
+  const nextBaseline = buildImportBaselineFromExtract({ ...extract, materials, commercialBreakdown })
   const importBaseline = nextBaseline
     ? nextBaseline
-    : (replaceBoq ? null : (base.importBaseline || null))
+    : (shouldReplace ? null : (base.importBaseline || null))
 
   return {
     ...base,
@@ -146,6 +162,7 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
     pricing,
     projectEstimate,
     importBaseline,
+    commercialBreakdown: Object.keys(commercialBreakdown).length ? commercialBreakdown : base.commercialBreakdown,
     summaries: {
       commercial: extract.contractSum
         ? `Contract sum: GHS ${Number(extract.contractSum).toLocaleString('en')}`

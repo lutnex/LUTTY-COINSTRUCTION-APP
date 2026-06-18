@@ -60,6 +60,33 @@ function getLastChatExtract(msgs) {
   }
   return null
 }
+
+function buildRawEstimateInput(intel, docGen) {
+  const hasIntelBoq = intel?.boqItems?.length > 0
+  return {
+    boqRows: hasIntelBoq ? intel.boqItems : docGen.boqRows,
+    materials: intel?.materials?.length ? intel.materials : docGen.mats,
+    labor: intel?.labor?.length ? intel.labor : docGen.labor,
+    prelims: intel?.prelims?.length ? intel.prelims : (hasIntelBoq ? [] : (docGen.prelims || [])),
+    equipment: intel?.equipment?.length ? intel.equipment : (docGen.equipment || []),
+    financialAdjustments: docGen.financialAdjustments,
+  }
+}
+
+function buildReconciledEstimateInput(intel, docGen, chatMsgs, inputOverride = null) {
+  const raw = inputOverride || buildRawEstimateInput(intel, docGen)
+  const chatExtract = getLastChatExtract(chatMsgs || [])
+  const commercialBreakdown = resolveCommercialBreakdown(intel || {}, chatExtract)
+  return {
+    ...raw,
+    materials: reconcileMaterialSchedule(raw.materials, {
+      commercialBreakdown,
+      importBaseline: intel?.importBaseline,
+    }),
+    commercialBreakdown,
+    chatExtract,
+  }
+}
 import {
   loadPriceProfileState,
   getActiveProfileItems,
@@ -76,7 +103,12 @@ import { fetchMaterialPrices } from './services/materialPricesService.js'
 import { saveAppSession, loadAppSession, clearAppSession } from './utils/sessionStore.js'
 import { downloadPDF, printDocument, buildDocumentHTML } from './services/ai/pdfEngine.js'
 import { buildApprovalBreakdown } from './services/pricing/directCostBreakdown.js'
-import { buildMaterialAudit } from './utils/materialAudit.js'
+import {
+  buildMaterialAudit,
+  reconcileMaterialSchedule,
+  resolveCommercialBreakdown,
+} from './utils/materialAudit.js'
+import { materialsGrandTotal } from './utils/materialCategories.js'
 import EstimateApprovalDialog from './components/shared/EstimateApprovalDialog.jsx'
 import {
   lockProjectEstimate,
@@ -435,22 +467,8 @@ function AppShellInner({ projState, dispatch }) {
   }, [docGen, companyLogo, risks, proc, intelligence.data])
 
   const getEstimateInput = useCallback(() => {
-    const intel = intelligence.data
-    const hasIntelBoq = intel?.boqItems?.length > 0
-    return {
-      boqRows: hasIntelBoq ? intel.boqItems : docGen.boqRows,
-      materials: intel?.materials?.length ? intel.materials : docGen.mats,
-      labor: intel?.labor?.length ? intel.labor : docGen.labor,
-      prelims: intel?.prelims?.length ? intel.prelims : (hasIntelBoq ? [] : (docGen.prelims || [])),
-      equipment: intel?.equipment?.length ? intel.equipment : (docGen.equipment || []),
-      financialAdjustments: docGen.financialAdjustments,
-    }
+    return buildRawEstimateInput(intelligence.data, docGen)
   }, [intelligence.data, docGen])
-
-  const estimateApprovalBreakdown = useMemo(() => {
-    if (!estimateApprovalOpen) return null
-    return buildApprovalBreakdown(estimateApprovalInput ?? getEstimateInput())
-  }, [estimateApprovalOpen, estimateApprovalInput, getEstimateInput])
 
   const syncLockedEstimate = useCallback((locked) => {
     if (!locked?.locked) return
@@ -464,17 +482,6 @@ function AppShellInner({ projState, dispatch }) {
     docGen.applyLockedEstimate(locked)
   }, [intelligence, docGen])
 
-  const lockEstimateEverywhere = useCallback((approval, inputOverride = null) => {
-    const input = inputOverride ?? estimateApprovalInput ?? getEstimateInput()
-    const locked = lockProjectEstimate(
-      resolveProjectEstimate(docGen.projectEstimate, intelligence.data?.projectEstimate) || {},
-      { ...approval, source: estimateApprovalSource },
-      input,
-    )
-    syncLockedEstimate(locked)
-    return locked
-  }, [intelligence, docGen, estimateApprovalSource, getEstimateInput, estimateApprovalInput, syncLockedEstimate])
-
   const requestEstimateApproval = useCallback((callback, { source = ESTIMATE_SOURCES.USER_OVERRIDE, input = null } = {}) => {
     if (isEstimateLocked(docGen.projectEstimate, intelligence.data?.projectEstimate)) {
       const resolved = resolveProjectEstimate(docGen.projectEstimate, intelligence.data?.projectEstimate)
@@ -487,17 +494,6 @@ function AppShellInner({ projState, dispatch }) {
     setEstimateApprovalCallback(() => callback)
     setEstimateApprovalOpen(true)
   }, [docGen.projectEstimate, intelligence.data?.projectEstimate, syncLockedEstimate])
-
-  const handleEstimateApprovalConfirm = useCallback((approval) => {
-    approvalRejectRef.current = null
-    const locked = lockEstimateEverywhere(approval)
-    setEstimateApprovalOpen(false)
-    setEstimateApprovalInput(null)
-    const cb = estimateApprovalCallback
-    setEstimateApprovalCallback(null)
-    cb?.(locked)
-    toast.success('Estimate locked', `Approved total: GHS ${Number(locked.approvedTotal).toLocaleString('en')}`)
-  }, [lockEstimateEverywhere, estimateApprovalCallback, toast])
 
   const handleOpenApproveEstimate = useCallback(() => {
     if (isEstimateLocked(docGen.projectEstimate, intelligence.data?.projectEstimate)) {
@@ -557,20 +553,122 @@ function AppShellInner({ projState, dispatch }) {
 
   const handleAIExtract = useCallback((extract) => {
     if (extract?.requiresApproval) return
-    intelligence.mergeFromExtract(extract)
-  }, [intelligence])
+    const shouldReplace = Boolean(extract?.hasBOQ || extract?.hasEstimate || extract?.materials?.length)
+    const next = intelligence.recomputePricing(
+      mergeExtractIntoProjectData(intelligence.data, extract, { replaceBoq: shouldReplace }),
+    )
+    intelligence.setData(next)
+    const payload = projectDataToDocPayload(next, { docType: 'boq', source: 'ai-chat' })
+    if (payload && (payload.materials?.length || payload.boqRows?.length)) {
+      docGen.applyBOQTransfer({ ...payload, source: 'ai-chat' })
+    }
+  }, [intelligence, docGen])
 
   const chat = useChat({ prices, onUsage: handleUsage, onExtract: handleAIExtract })
 
-  const estimateMaterialAudit = useMemo(() => {
+  const getReconciledEstimateInput = useCallback((inputOverride = null) => {
+    const bundle = buildReconciledEstimateInput(intelligence.data, docGen, chat.msgs, inputOverride)
+    const { commercialBreakdown, chatExtract, ...input } = bundle
+    return { input, commercialBreakdown, chatExtract }
+  }, [intelligence.data, docGen, chat.msgs])
+
+  const lockEstimateEverywhere = useCallback((approval, inputOverride = null) => {
+    const { input } = getReconciledEstimateInput(inputOverride ?? estimateApprovalInput)
+    const locked = lockProjectEstimate(
+      resolveProjectEstimate(docGen.projectEstimate, intelligence.data?.projectEstimate) || {},
+      { ...approval, source: estimateApprovalSource },
+      input,
+    )
+    syncLockedEstimate(locked)
+    return locked
+  }, [intelligence, docGen, estimateApprovalSource, getReconciledEstimateInput, estimateApprovalInput, syncLockedEstimate])
+
+  const handleEstimateApprovalConfirm = useCallback((approval) => {
+    approvalRejectRef.current = null
+    const locked = lockEstimateEverywhere(approval)
+    setEstimateApprovalOpen(false)
+    setEstimateApprovalInput(null)
+    const cb = estimateApprovalCallback
+    setEstimateApprovalCallback(null)
+    cb?.(locked)
+    toast.success('Estimate locked', `Approved total: GHS ${Number(locked.approvedTotal).toLocaleString('en')}`)
+  }, [lockEstimateEverywhere, estimateApprovalCallback, toast])
+
+  const estimateApprovalBundle = useMemo(() => {
     if (!estimateApprovalOpen) return null
-    const input = estimateApprovalInput ?? getEstimateInput()
-    return buildMaterialAudit({
-      materials: input.materials,
-      importBaseline: intelligence.data?.importBaseline,
-      chatExtractFallback: getLastChatExtract(chat.msgs),
+    const { input, commercialBreakdown, chatExtract } = getReconciledEstimateInput(estimateApprovalInput)
+    return {
+      input,
+      breakdown: buildApprovalBreakdown(input),
+      materialAudit: buildMaterialAudit({
+        materials: input.materials,
+        importBaseline: intelligence.data?.importBaseline,
+        chatExtractFallback: chatExtract,
+        commercialBreakdown,
+      }),
+      commercialBreakdown,
+    }
+  }, [
+    estimateApprovalOpen,
+    estimateApprovalInput,
+    getReconciledEstimateInput,
+    intelligence.data?.importBaseline,
+  ])
+
+  useEffect(() => {
+    if (!estimateApprovalOpen || !estimateApprovalBundle) return
+    const { input, commercialBreakdown } = estimateApprovalBundle
+    const intel = intelligence.data
+    const currentTotal = materialsGrandTotal(intel?.materials || [])
+    const nextTotal = materialsGrandTotal(input.materials || [])
+    const needsMaterials = Math.abs(currentTotal - nextTotal) > 0.02
+    const needsCommercial = commercialBreakdown?.materials > 0
+      && !intel?.commercialBreakdown?.materials
+
+    if (!needsMaterials && !needsCommercial) return
+
+    const next = intelligence.recomputePricing({
+      ...intel,
+      materials: needsMaterials ? input.materials : intel.materials,
+      commercialBreakdown: needsCommercial ? commercialBreakdown : intel.commercialBreakdown,
     })
-  }, [estimateApprovalOpen, estimateApprovalInput, getEstimateInput, intelligence.data?.importBaseline, chat.msgs])
+    intelligence.setData(next)
+
+    if (needsMaterials && input.materials?.length) {
+      const payload = projectDataToDocPayload(next, { docType: 'boq', source: 'ai-chat' })
+      if (payload?.materials?.length) {
+        docGen.applyBOQTransfer({ ...payload, source: 'ai-chat' })
+      }
+    }
+  }, [estimateApprovalOpen, estimateApprovalBundle]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const chatExtract = getLastChatExtract(chat.msgs)
+    const commercialBreakdown = resolveCommercialBreakdown(intelligence.data, chatExtract)
+    if (!commercialBreakdown?.materials) return
+
+    const reconciled = reconcileMaterialSchedule(intelligence.data?.materials || docGen.mats, {
+      commercialBreakdown,
+      importBaseline: intelligence.data?.importBaseline,
+    })
+    const currentTotal = materialsGrandTotal(intelligence.data?.materials || docGen.mats || [])
+    const nextTotal = materialsGrandTotal(reconciled)
+    const needsHeal = Math.abs(currentTotal - nextTotal) > 0.02
+      || !intelligence.data?.commercialBreakdown?.materials
+
+    if (!needsHeal) return
+
+    const next = intelligence.recomputePricing({
+      ...intelligence.data,
+      materials: reconciled,
+      commercialBreakdown,
+    })
+    intelligence.setData(next)
+    const payload = projectDataToDocPayload(next, { docType: 'boq', source: 'ai-chat' })
+    if (payload?.materials?.length) {
+      docGen.applyBOQTransfer({ ...payload, source: 'ai-chat' })
+    }
+  }, [chat.msgs.length, intelligence.data?.materials?.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const session = useWorkspaceSession({
     tab,
@@ -1880,9 +1978,9 @@ function AppShellInner({ projState, dispatch }) {
         open={estimateApprovalOpen}
         onClose={cancelEstimateApproval}
         onConfirm={handleEstimateApprovalConfirm}
-        directCostTotal={estimateApprovalBreakdown?.directTotal ?? 0}
-        breakdown={estimateApprovalBreakdown}
-        materialAudit={estimateMaterialAudit}
+        directCostTotal={estimateApprovalBundle?.breakdown?.directTotal ?? 0}
+        breakdown={estimateApprovalBundle?.breakdown}
+        materialAudit={estimateApprovalBundle?.materialAudit}
       />
     </div>
   )
