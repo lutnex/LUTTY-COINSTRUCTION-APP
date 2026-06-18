@@ -2,6 +2,7 @@ import { today } from './formatters.js'
 import { safeLocalStorageSetItem, safeParseJson } from './safeSerialize.js'
 import { normalizeBoqRow } from './boqItemFactory.js'
 import { computePricing } from '../services/pricing/pricingEngine.js'
+import { buildProjectEstimate, ESTIMATE_SOURCES } from './projectEstimate.js'
 import { resolveInitialPaymentTerms, normalizePaymentTerms } from './paymentTerms.js'
 import { normalizeMaterialState } from './materialCategories.js'
 import { consolidateExtractForImport } from './chatExtract.js'
@@ -39,6 +40,7 @@ export function emptyProjectData() {
     pricing: null,
     summaries: { commercial: '' },
     financialAdjustments: null,
+    projectEstimate: null,
     metadata: { source: null, updatedAt: null, version: 1 },
   }
 }
@@ -79,12 +81,20 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
     dedupe.push(r)
   }
 
-  const pricing = computePricing({
+  const pricingInput = {
     boqRows: dedupe,
     materials: consolidated.materials?.length ? consolidated.materials : base.materials,
     labor: consolidated.labor?.length ? consolidated.labor : base.labor,
     financialAdjustments: base.financialAdjustments ?? undefined,
-  })
+  }
+
+  const pricing = base.projectEstimate?.locked
+    ? base.projectEstimate.pricingSnapshot
+    : computePricing(pricingInput)
+
+  const projectEstimate = base.projectEstimate?.locked
+    ? base.projectEstimate
+    : buildProjectEstimate({ ...pricingInput, source: ESTIMATE_SOURCES.AI_CHAT })
 
   const notesParts = []
   if (extract.assumptions?.length) notesParts.push('ASSUMPTIONS:\n' + extract.assumptions.join('\n'))
@@ -122,6 +132,7 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
     risks: extract.risks?.length ? extract.risks : base.risks,
     collections: extract.collections?.length ? extract.collections : base.collections,
     pricing,
+    projectEstimate,
     summaries: {
       commercial: extract.contractSum
         ? `Contract sum: GHS ${Number(extract.contractSum).toLocaleString('en')}`
@@ -184,6 +195,7 @@ export function projectDataToDocPayload(data, { docType = 'boq', source = 'intel
     drawingAnalysis: data.drawingAnalysis || {},
     collections: data.collections || [],
     pricing: p,
+    projectEstimate: data.projectEstimate,
     financialAdjustments: data.financialAdjustments,
     workflow: data.workflow || null,
     presentationStyle: data.workflow?.presentationStyle || data.presentationStyle || 'detailed',

@@ -7,9 +7,13 @@ import { normalizeBoqRow } from '../utils/boqItemFactory.js'
 import {
   loadFinancialAdjustments,
   persistFinancialAdjustments,
-  applyPreferenceDefaults,
   createDefaultFinancialAdjustments,
 } from '../utils/financialAdjustments.js'
+import {
+  buildProjectEstimate,
+  lockProjectEstimate,
+  ESTIMATE_SOURCES,
+} from '../utils/projectEstimate.js'
 import {
   normalizePaymentTerms,
   resolveInitialPaymentTerms,
@@ -85,6 +89,7 @@ export function useDocGen(estimatePreferences = null) {
   const [boqRows, setBoqRows]         = useState([])
   const [contractSum, setContractSum] = useState(0)
   const [financialAdjustments, setFinancialAdjustmentsRaw] = useState(() => loadFinancialAdjustments())
+  const [projectEstimate, setProjectEstimate] = useState(null)
   const [preview, setPreview]         = useState(null)
   const [busy,    setBusy]            = useState(false)
   const [transferSource, setTransferSource] = useState(null)
@@ -116,8 +121,9 @@ export function useDocGen(estimatePreferences = null) {
   }, [])
 
   const setFinancialAdjustments = useCallback((next) => {
+    if (projectEstimate?.locked) return
     setFinancialAdjustmentsRaw(next)
-  }, [])
+  }, [projectEstimate?.locked])
 
   useEffect(() => {
     persistFinancialAdjustments(financialAdjustments)
@@ -305,14 +311,17 @@ export function useDocGen(estimatePreferences = null) {
     }, payload)
     if (ok) {
       setTransferSource(payload.source || 'boq-builder')
-      if (estimatePreferences && !payload.financialAdjustments) {
-        setFinancialAdjustmentsRaw(prev =>
-          applyPreferenceDefaults(prev, estimatePreferences)
-        )
+      if (payload.projectEstimate) {
+        setProjectEstimate(payload.projectEstimate)
+        if (payload.projectEstimate.financialAdjustmentsSnapshot) {
+          setFinancialAdjustmentsRaw(payload.projectEstimate.financialAdjustmentsSnapshot)
+        }
+      } else if (!payload.financialAdjustments) {
+        setFinancialAdjustmentsRaw(createDefaultFinancialAdjustments())
       }
     }
     return ok
-  }, [estimatePreferences])
+  }, [])
 
   const fillFromExtract = useCallback((extract) => {
     const consolidated = consolidateExtractForImport(extract)
@@ -603,7 +612,8 @@ export function useDocGen(estimatePreferences = null) {
     matCategories,
     labor,
     prelims,
-    contractSum,
+    contractSum: projectEstimate?.locked ? projectEstimate.approvedTotal : contractSum,
+    projectEstimate,
     financialAdjustments,
     assumptions: extras.assumptions,
     exclusions: extras.exclusions,
@@ -613,7 +623,7 @@ export function useDocGen(estimatePreferences = null) {
     previewHtml: previewHtml ?? preview,
     transferSource,
     documentSections,
-  }), [docType, meta, boqRows, mats, matCategories, labor, prelims, contractSum, financialAdjustments, extras, preview, transferSource, documentSections])
+  }), [docType, meta, boqRows, mats, matCategories, labor, prelims, contractSum, projectEstimate, financialAdjustments, extras, preview, transferSource, documentSections])
 
   const loadDocumentSnapshot = useCallback((snapshot, savedDocId = null) => {
     if (!snapshot) return false
@@ -658,6 +668,7 @@ export function useDocGen(estimatePreferences = null) {
     }
     setPreview(snapshot.previewHtml || null)
     setTransferSource(snapshot.transferSource || 'saved-document')
+    if (snapshot.projectEstimate) setProjectEstimate(snapshot.projectEstimate)
     setActiveSavedDocId(savedDocId)
     setTimeout(() => { skipPersist.current = false }, 300)
     return true
@@ -679,6 +690,7 @@ export function useDocGen(estimatePreferences = null) {
     setPrelims([])
     setBoqRows([])
     setContractSum(0)
+    setProjectEstimate(null)
     setFinancialAdjustmentsRaw(createDefaultFinancialAdjustments())
     setPreview(null)
     setTransferSource(null)
@@ -690,18 +702,58 @@ export function useDocGen(estimatePreferences = null) {
     setTimeout(() => { skipPersist.current = false }, 300)
   }, [clearVariationWorkflow])
 
-  const pricing = useMemo(() => computePricing({
-    boqRows,
-    materials: mats,
-    labor,
-    prelims,
-    financialAdjustments,
-  }), [boqRows, mats, labor, prelims, financialAdjustments])
+  const approveAndLockEstimate = useCallback((approval) => {
+    const locked = lockProjectEstimate(projectEstimate || {}, approval, {
+      boqRows,
+      materials: mats,
+      labor,
+      prelims,
+      financialAdjustments,
+      source: ESTIMATE_SOURCES.DOC_GEN,
+    })
+    setProjectEstimate(locked)
+    if (locked.financialAdjustmentsSnapshot) {
+      setFinancialAdjustmentsRaw(locked.financialAdjustmentsSnapshot)
+    }
+    setContractSum(locked.approvedTotal)
+    return locked
+  }, [projectEstimate, boqRows, mats, labor, prelims, financialAdjustments])
+
+  const applyLockedEstimate = useCallback((locked) => {
+    if (!locked) return
+    setProjectEstimate(locked)
+    if (locked.financialAdjustmentsSnapshot) {
+      setFinancialAdjustmentsRaw(locked.financialAdjustmentsSnapshot)
+    }
+    setContractSum(locked.approvedTotal || 0)
+  }, [])
+
+  const applyUnlockedEstimate = useCallback((unlocked, financialAdjustmentsFromLock) => {
+    if (!unlocked) return
+    setProjectEstimate(unlocked)
+    if (financialAdjustmentsFromLock) {
+      setFinancialAdjustmentsRaw(financialAdjustmentsFromLock)
+    }
+    setContractSum(unlocked.approvedTotal || 0)
+  }, [])
+
+  const pricing = useMemo(() => {
+    if (projectEstimate?.locked && projectEstimate.pricingSnapshot) {
+      return projectEstimate.pricingSnapshot
+    }
+    return computePricing({
+      boqRows,
+      materials: mats,
+      labor,
+      prelims,
+      financialAdjustments,
+    })
+  }, [boqRows, mats, labor, prelims, financialAdjustments, projectEstimate])
 
   const totals = useMemo(() => ({
     ...pricing.summary,
-    grand: pricing.layers.finalEstimate,
-  }), [pricing])
+    grand: projectEstimate?.locked ? projectEstimate.approvedTotal : pricing.layers.finalEstimate,
+  }), [pricing, projectEstimate])
 
   const pdfData = useCallback(() => {
     const legacy = sectionsToLegacyExtras(documentSections)
@@ -732,8 +784,11 @@ export function useDocGen(estimatePreferences = null) {
       drawingAnalysis: legacy.drawingAnalysis,
       risks: extras.risks,
       pricing,
+      projectEstimate,
       financialAdjustments,
-      contractSum: vSummary?.revisedTotal ?? pricing.layers.finalEstimate,
+      contractSum: projectEstimate?.locked
+        ? projectEstimate.approvedTotal
+        : (vSummary?.revisedTotal ?? pricing.layers.finalEstimate),
       documentSections,
       presentationStyle: extras.presentationStyle,
       boqCategorySummaries: extras.boqCategorySummaries,
@@ -751,7 +806,7 @@ export function useDocGen(estimatePreferences = null) {
         userNotes: variationDraft.userNotes,
       } : null,
     }
-  }, [docType, meta, mats, matCategories, labor, prelims, boqRows, extras, pricing, financialAdjustments, documentSections, variationDraft, variationCalculations])
+  }, [docType, meta, mats, matCategories, labor, prelims, boqRows, extras, pricing, projectEstimate, financialAdjustments, documentSections, variationDraft, variationCalculations])
 
   const hasBOQData = boqRows.length > 0 || mats.some(m => m.desc) || meta.projectTitle?.trim()
 
@@ -772,6 +827,7 @@ export function useDocGen(estimatePreferences = null) {
     transferSource, setTransferSource,
     extras, setIntelligenceExtras,
     totals, pricing, pdfData, hasBOQData,
+    projectEstimate, setProjectEstimate, approveAndLockEstimate, applyLockedEstimate, applyUnlockedEstimate,
     financialAdjustments, setFinancialAdjustments,
     fillFromExtract, applyBOQTransfer,
     resetDocument, loadDocumentSnapshot, getDocumentSnapshot,

@@ -9,8 +9,10 @@ export default function FinancialAdjustmentsPanel({
   adjustmentLines = [],
   finalTotal = 0,
   compact = false,
+  locked = false,
 }) {
   const updateItem = (id, patch) => {
+    if (locked) return
     onChange({
       ...adjustments,
       [id]: { ...adjustments[id], ...patch },
@@ -44,6 +46,11 @@ export default function FinancialAdjustmentsPanel({
       {!compact && (
         <div style={{ fontFamily: "'Bebas Neue'", fontSize: 14, letterSpacing: 1, color: C.amber, marginBottom: 12 }}>
           Financial Adjustments
+          {locked && (
+            <span style={{ fontSize: 10, color: C.textFaint, marginLeft: 10, fontFamily: 'DM Sans' }}>
+              (locked — unlock estimate to edit)
+            </span>
+          )}
         </div>
       )}
 
@@ -71,6 +78,7 @@ export default function FinancialAdjustmentsPanel({
                   <input
                     type="checkbox"
                     checked={Boolean(item.enabled)}
+                    disabled={locked}
                     onChange={e => updateItem(id, { enabled: e.target.checked })}
                   />
                   {meta.label}
@@ -83,6 +91,7 @@ export default function FinancialAdjustmentsPanel({
                     <button
                       type="button"
                       onClick={() => toggleLock(id)}
+                      disabled={locked}
                       title={item.locked ? 'Unlock — allow recalculation' : 'Lock — freeze this value'}
                       style={{
                         background: item.locked ? C.amberGlow : 'transparent',

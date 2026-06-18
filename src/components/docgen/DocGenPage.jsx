@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { C, DOC_TYPES } from '../../utils/constants.js'
 import { fmtN } from '../../utils/formatters.js'
 import FinancialAdjustmentsPanel from '../shared/FinancialAdjustmentsPanel.jsx'
+import EstimateAuditPanel from '../shared/EstimateAuditPanel.jsx'
 import PaymentTermsEditor from './PaymentTermsEditor.jsx'
 import MaterialsPanel from './MaterialsPanel.jsx'
 import ConfirmDialog from '../shared/ConfirmDialog.jsx'
@@ -18,6 +19,7 @@ import { nextRevisionForDocument } from '../../utils/savedDocuments.js'
 
 export default function DocGenPage({
   docGen, onDownload, onPrint, onPreview, onSaveDocument, onClearForm, onStartNewDocument,
+  onUnlockEstimate,
   onAIFill, pdfStatus, activeProjName, companyLogo, aiBusy, toast,
   variationOrders = [],
   onApplyVariationFromOrder,
@@ -48,6 +50,7 @@ export default function DocGenPage({
     preview, setPreview, busy, totals, pricing,
     transferSource, hasBOQData,
     financialAdjustments, setFinancialAdjustments,
+    projectEstimate,
     lastAutoSaved, activeSavedDocId,
     variationDraft, variationCalculations, hasVariationDraft,
     startVariationDraft, addVariationItem, updateVariationItem, removeVariationItem,
@@ -219,8 +222,10 @@ export default function DocGenPage({
               projectSubtotal={totals.projectSubtotal}
               adjustmentLines={adjustmentLines}
               finalTotal={totals.grand}
+              locked={Boolean(projectEstimate?.locked)}
               compact
             />
+            <EstimateAuditPanel projectEstimate={projectEstimate} compact onUnlock={onUnlockEstimate} />
           </>
         )
       default:

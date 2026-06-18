@@ -31,6 +31,11 @@ import {
   validateExportItemParity,
   EXPORT_INCOMPLETE_MESSAGE,
 } from '../../utils/exportItemCounts.js'
+import {
+  validateExportGate,
+  collectModuleTotals,
+  ESTIMATE_MISMATCH_MESSAGE,
+} from '../../utils/projectEstimate.js'
 
 const LOG_PREFIX = '[pdf-export]'
 
@@ -87,6 +92,21 @@ function enrichExportData(data, logoUrl) {
 }
 
 function computeTotals(data) {
+  // Locked estimate: never recalculate — use approved snapshot only
+  if (data.projectEstimate?.locked && data.projectEstimate.pricingSnapshot) {
+    const p = data.projectEstimate.pricingSnapshot
+    return {
+      matTotal: data.projectEstimate.materials?.total || 0,
+      boqTotal: (data.boqRows || []).reduce((s, r) => s + (r.clientSupplied ? 0 : parseFloat(r.amount) || 0), 0),
+      labTotal: data.projectEstimate.labour?.total || 0,
+      preTotal: data.projectEstimate.preliminaries?.total || 0,
+      works: p.layers.rawWorks || p.summary.sub,
+      grand: data.projectEstimate.approvedTotal,
+      audit: p.audit || [],
+      locked: true,
+    }
+  }
+
   if (data.pricing?.layers?.finalEstimate != null) {
     const p = data.pricing
     return {
@@ -120,6 +140,18 @@ function computeTotals(data) {
 }
 
 /** Compare preview HTML section markers with export data (debug / validation). */
+export function validateEstimateExport(data, moduleTotals = null) {
+  const totals = moduleTotals || collectModuleTotals({
+    chatEstimate: data.projectEstimate,
+    boqEstimate: data.projectEstimate,
+    docGenEstimate: data.projectEstimate,
+    exportEstimate: data.projectEstimate,
+  })
+  return validateExportGate({ projectEstimate: data.projectEstimate, moduleTotals: totals })
+}
+
+export { ESTIMATE_MISMATCH_MESSAGE }
+
 export function validateExportDocument(data, html) {
   const errors = []
   const d = enrichExportData(data)
@@ -792,6 +824,12 @@ export async function downloadPDF(data, filename, onProgress, logoUrl) {
   onProgress?.('Preparing document…')
   const logo = logoUrl || resolveLogoUrl()
   const enriched = enrichExportData(data, logo)
+
+  const estimateCheck = validateEstimateExport(enriched, data._moduleTotals)
+  if (!estimateCheck.ok) {
+    exportLog('validation', { blocked: true, reason: estimateCheck.message, mismatches: estimateCheck.mismatches })
+    throw new Error(estimateCheck.message)
+  }
 
   exportLog('dom-rendering', 'Building export HTML from full document state…')
   const previewHtml = buildDocumentHTML(enriched, logo)

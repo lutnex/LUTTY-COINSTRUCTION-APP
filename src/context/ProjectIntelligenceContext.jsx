@@ -8,6 +8,7 @@ import {
   projectToIntelligence,
 } from '../utils/projectIntelligence.js'
 import { computePricing } from '../services/pricing/pricingEngine.js'
+import { buildProjectEstimate, lockProjectEstimate, ESTIMATE_SOURCES } from '../utils/projectEstimate.js'
 import { normalizeBoqRow } from '../utils/boqItemFactory.js'
 
 const ProjectIntelligenceContext = createContext(null)
@@ -17,15 +18,46 @@ export function ProjectIntelligenceProvider({ children, activeProject }) {
   const skipSave = useRef(false)
 
   const recomputePricing = useCallback((d) => {
-    const pricing = computePricing({
+    if (d.projectEstimate?.locked) {
+      return {
+        ...d,
+        pricing: d.projectEstimate.pricingSnapshot,
+        financialAdjustments: d.projectEstimate.financialAdjustmentsSnapshot ?? d.financialAdjustments,
+      }
+    }
+    const pricingInput = {
       boqRows: d.boqItems,
       materials: d.materials,
       labor: d.labor,
       prelims: d.prelims,
       financialAdjustments: d.financialAdjustments,
+    }
+    const pricing = computePricing(pricingInput)
+    const projectEstimate = buildProjectEstimate({
+      ...pricingInput,
+      source: d.metadata?.source === 'boq-builder' ? ESTIMATE_SOURCES.BOQ_BUILDER : ESTIMATE_SOURCES.AI_CHAT,
     })
-    return { ...d, pricing }
+    return { ...d, pricing, projectEstimate }
   }, [])
+
+  const approveAndLockEstimate = useCallback((approval) => {
+    setData(prev => {
+      const locked = lockProjectEstimate(prev.projectEstimate || {}, approval, {
+        boqRows: prev.boqItems,
+        materials: prev.materials,
+        labor: prev.labor,
+        prelims: prev.prelims,
+        financialAdjustments: prev.financialAdjustments,
+        source: approval.source || ESTIMATE_SOURCES.USER_OVERRIDE,
+      })
+      return recomputePricing({
+        ...prev,
+        projectEstimate: locked,
+        financialAdjustments: locked.financialAdjustmentsSnapshot,
+        metadata: { ...prev.metadata, updatedAt: new Date().toISOString() },
+      })
+    })
+  }, [recomputePricing])
 
   const setBoqItems = useCallback((items) => {
     setData(prev => {
@@ -84,6 +116,7 @@ export function ProjectIntelligenceProvider({ children, activeProject }) {
     getDocGenPayload,
     patchProjectInfo,
     recomputePricing,
+    approveAndLockEstimate,
   }
 
   return (

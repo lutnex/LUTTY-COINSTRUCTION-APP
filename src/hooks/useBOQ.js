@@ -74,12 +74,23 @@ export function useBOQ(intelligence = null, financialAdjustments = null) {
   const filtered = section === 'All' ? rows : rows.filter(r => r.section === section)
 
   const totals = useMemo(() => {
+    const locked = intelligence?.data?.projectEstimate
+    if (locked?.locked) {
+      return {
+        ...locked.pricingSnapshot?.summary,
+        grand: locked.approvedTotal,
+        projectSubtotal: locked.directCostTotal,
+        mode: 'locked',
+      }
+    }
     if (external && intelligence.data?.pricing) {
       const p = intelligence.data.pricing
       return { ...p.summary, grand: p.layers.finalEstimate, mode: p.mode }
     }
     return { ...computeBoqBuilderTotals(rows, { financialAdjustments }), mode: 'manual' }
-  }, [rows, external, intelligence?.data?.pricing, financialAdjustments])
+  }, [rows, external, intelligence?.data?.pricing, intelligence?.data?.projectEstimate, financialAdjustments])
+
+  const projectEstimate = external ? intelligence?.data?.projectEstimate : null
 
   const pricingAudit = useMemo(() => {
     if (external && intelligence.data?.pricing) return intelligence.data.pricing
@@ -93,6 +104,7 @@ export function useBOQ(intelligence = null, financialAdjustments = null) {
     setSection,
     totals,
     pricingAudit,
+    projectEstimate,
     update,
     addRow,
     removeRow,
