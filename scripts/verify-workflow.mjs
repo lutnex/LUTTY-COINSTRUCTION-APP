@@ -173,6 +173,14 @@ check('supabase schema includes variation_orders and revised_documents tables', 
   assert.match(sql, /document_data JSONB/)
 })
 
+check('CalcsPage uses QS calcEngine', () => {
+  const src = read('src/components/tools/CalcsPage.jsx')
+  assert.match(src, /calcEngine/)
+  assert.match(src, /Unit Converter/)
+  assert.match(src, /Mortar/)
+  assert.match(src, /Wastage/)
+})
+
 check('shared DeLuteroits document template exists for all exports', () => {
   assert.ok(existsSync(join(root, 'src/utils/deLuteroitsDocumentTemplate.js')))
   assert.ok(existsSync(join(root, 'src/components/docgen/DeLuteroitsDocumentTemplate.jsx')))
