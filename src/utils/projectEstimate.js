@@ -369,6 +369,50 @@ export function validateExportGate({ projectEstimate, moduleTotals }) {
   return { ok: true }
 }
 
+/**
+ * Pick the canonical locked estimate from DocGen vs intelligence (avoids desync).
+ * Prefers a fully locked estimate with pricing snapshot.
+ */
+export function resolveProjectEstimate(docGenEstimate, intelEstimate) {
+  const candidates = [docGenEstimate, intelEstimate].filter(Boolean)
+  const locked = candidates.find(e => e.locked && e.pricingSnapshot)
+  if (locked) return locked
+  return docGenEstimate || intelEstimate || null
+}
+
+export function isEstimateLocked(docGenEstimate, intelEstimate) {
+  const resolved = resolveProjectEstimate(docGenEstimate, intelEstimate)
+  return Boolean(resolved?.locked && resolved?.pricingSnapshot)
+}
+
+/** Attach locked estimate + parity totals to any export payload. */
+export function enrichExportWithEstimate(data, projectEstimate) {
+  if (!projectEstimate?.locked) return data
+  const totals = collectModuleTotals({
+    chatEstimate: projectEstimate,
+    boqEstimate: projectEstimate,
+    docGenEstimate: projectEstimate,
+    exportEstimate: projectEstimate,
+  })
+  return {
+    ...data,
+    projectEstimate,
+    pricing: projectEstimate.pricingSnapshot,
+    contractSum: projectEstimate.approvedTotal,
+    _moduleTotals: totals,
+  }
+}
+
+export function estimateInputFromSnapshot(snapshot = {}) {
+  return {
+    boqRows: snapshot.boqRows || [],
+    materials: snapshot.materials || [],
+    labor: snapshot.labor || [],
+    prelims: snapshot.prelims || [],
+    financialAdjustments: snapshot.financialAdjustments,
+  }
+}
+
 export function syncEstimateFromPricing(pricing, source, partial = {}) {
   const estimate = buildProjectEstimate({
     boqRows: partial.boqRows || [],

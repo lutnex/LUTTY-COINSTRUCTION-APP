@@ -20,6 +20,7 @@ import { nextRevisionForDocument } from '../../utils/savedDocuments.js'
 export default function DocGenPage({
   docGen, onDownload, onPrint, onPreview, onSaveDocument, onClearForm, onStartNewDocument,
   onUnlockEstimate,
+  onApproveEstimate,
   onAIFill, pdfStatus, activeProjName, companyLogo, aiBusy, toast,
   variationOrders = [],
   onApplyVariationFromOrder,
@@ -225,7 +226,12 @@ export default function DocGenPage({
               locked={Boolean(projectEstimate?.locked)}
               compact
             />
-            <EstimateAuditPanel projectEstimate={projectEstimate} compact onUnlock={onUnlockEstimate} />
+            <EstimateAuditPanel
+              projectEstimate={projectEstimate}
+              compact
+              onUnlock={onUnlockEstimate}
+              onApprove={onApproveEstimate}
+            />
           </>
         )
       default:
@@ -325,6 +331,11 @@ export default function DocGenPage({
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
           <button onClick={onDownload} disabled={isEmpty} style={{ ...btn('primary'), opacity: isEmpty ? .5 : 1 }}>⬇ Download PDF</button>
           <button onClick={onPrint} disabled={isEmpty} style={{ ...btn('sky'), opacity: isEmpty ? .5 : 1 }}>🖨️ Print</button>
+          {onApproveEstimate && !projectEstimate?.locked && (
+            <button onClick={onApproveEstimate} disabled={isEmpty} style={{ ...btn('amber'), opacity: isEmpty ? .5 : 1 }}>
+              ✓ Approve &amp; Lock
+            </button>
+          )}
           <button onClick={onPreview} disabled={isEmpty} style={{ ...btn('green'), opacity: isEmpty ? .5 : 1 }}>👁 Preview</button>
           <button onClick={() => setSaveOpen(true)} disabled={isEmpty} style={{ ...btn('outline'), opacity: isEmpty ? .5 : 1 }}>💾 Save Document</button>
           <button

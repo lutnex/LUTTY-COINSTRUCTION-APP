@@ -9,6 +9,8 @@ import {
   unlockProjectEstimate,
   validateEstimateParity,
   validateExportGate,
+  resolveProjectEstimate,
+  isEstimateLocked,
   APPROVAL_MODES,
   ESTIMATE_MISMATCH_MESSAGE,
 } from '../src/utils/projectEstimate.js'
@@ -107,6 +109,17 @@ test('unlock restores live recalculation without clearing line items', () => {
   assert(unlocked.pricingSnapshot == null, 'snapshot cleared')
   assert(Math.abs(unlocked.approvedTotal - 60000) < 0.02, 'totals still reflect line items')
   assert(unlocked.previousLock?.approvedTotal === locked.approvedTotal, 'preserves lock history')
+})
+
+test('resolveProjectEstimate prefers locked snapshot when stores desync', () => {
+  const locked = lockProjectEstimate({}, { modes: [APPROVAL_MODES.DIRECT_ONLY] }, {
+    boqRows: [{ amount: 1000 }],
+  })
+  const unlocked = { locked: false, approvedTotal: 9999 }
+  const resolved = resolveProjectEstimate(unlocked, locked)
+  assert(resolved.locked === true)
+  assert(resolved.approvedTotal === locked.approvedTotal)
+  assert(isEstimateLocked(unlocked, locked) === true)
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

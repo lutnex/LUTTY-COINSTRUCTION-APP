@@ -1,7 +1,7 @@
 import { C, BOQ_SECTIONS } from '../../utils/constants.js'
 import EstimateAuditPanel from '../shared/EstimateAuditPanel.jsx'
 
-export default function BOQPage({ boq, onSendToDocGen, onAIReview, onUnlockEstimate, aiBusy }) {
+export default function BOQPage({ boq, onSendToDocGen, onAIReview, onUnlockEstimate, onApproveEstimate, aiBusy }) {
   const { rows, filtered, section, setSection, totals, pricingAudit, projectEstimate, update, addRow, removeRow, duplicateRow, clear } = boq
 
   const fmtN = (n) => n ? Number(n).toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'
@@ -136,7 +136,11 @@ export default function BOQPage({ boq, onSendToDocGen, onAIReview, onUnlockEstim
           </table>
         </div>
 
-        <EstimateAuditPanel projectEstimate={projectEstimate} onUnlock={onUnlockEstimate} />
+        <EstimateAuditPanel
+          projectEstimate={projectEstimate}
+          onUnlock={onUnlockEstimate}
+          onApprove={onApproveEstimate}
+        />
       </div>
     </div>
   )

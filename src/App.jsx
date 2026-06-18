@@ -1,5 +1,5 @@
 // src/App.jsx
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { ToastProvider, useToast } from './context/ToastContext.jsx'
 import { ProjectProvider, useProjects } from './context/ProjectContext.jsx'
@@ -74,12 +74,16 @@ import { extractAgreedPricesFromChat, extractAllPricesFromContext } from './util
 import { loadAllPriceProfiles, persistPriceProfiles } from './services/priceProfilesService.js'
 import { fetchMaterialPrices } from './services/materialPricesService.js'
 import { saveAppSession, loadAppSession, clearAppSession } from './utils/sessionStore.js'
-import { downloadPDF, printDocument, buildDocumentHTML, validateEstimateExport } from './services/ai/pdfEngine.js'
+import { downloadPDF, printDocument, buildDocumentHTML } from './services/ai/pdfEngine.js'
 import EstimateApprovalDialog from './components/shared/EstimateApprovalDialog.jsx'
 import {
   lockProjectEstimate,
   unlockProjectEstimate,
   collectModuleTotals,
+  resolveProjectEstimate,
+  isEstimateLocked,
+  enrichExportWithEstimate,
+  estimateInputFromSnapshot,
   ESTIMATE_SOURCES,
 } from './utils/projectEstimate.js'
 import { useCompanyLogo } from './hooks/useCompanyLogo.js'
@@ -168,6 +172,8 @@ function AppShellInner({ projState, dispatch }) {
   const [estimateApprovalOpen, setEstimateApprovalOpen] = useState(false)
   const [estimateApprovalCallback, setEstimateApprovalCallback] = useState(null)
   const [estimateApprovalSource, setEstimateApprovalSource] = useState(ESTIMATE_SOURCES.USER_OVERRIDE)
+  const [estimateApprovalInput, setEstimateApprovalInput] = useState(null)
+  const approvalRejectRef = useRef(null)
 
   useEffect(() => {
     const session = loadWorkflowSession()
@@ -405,20 +411,17 @@ function AppShellInner({ projState, dispatch }) {
   const buildExportData = useCallback(() => {
     const base = docGen.pdfData()
     const intel = intelligence.data
-    const projectEstimate = docGen.projectEstimate || intel.projectEstimate
+    const projectEstimate = resolveProjectEstimate(docGen.projectEstimate, intel.projectEstimate)
     const moduleTotals = collectModuleTotals({
-      chatEstimate: intel.projectEstimate,
-      boqEstimate: intel.projectEstimate,
-      docGenEstimate: docGen.projectEstimate,
+      chatEstimate: projectEstimate,
+      boqEstimate: projectEstimate,
+      docGenEstimate: projectEstimate,
       exportEstimate: projectEstimate,
     })
-    return {
+    return enrichExportWithEstimate({
       ...base,
-      projectEstimate,
-      _moduleTotals: moduleTotals,
       exportedAt: new Date().toISOString(),
       logoUrl: companyLogo.getExportLogo(),
-      pricing: projectEstimate?.locked ? projectEstimate.pricingSnapshot : (base.pricing || intel.pricing),
       risks: base.type === 'risk_report' ? risks.map(r => ({
         risk: r.risk, rating: r.rating, mitigation: r.mitigation,
       })) : (base.risks?.length ? base.risks : intel.risks),
@@ -426,7 +429,7 @@ function AppShellInner({ projState, dispatch }) {
         material: p.material, quantity: p.quantity, unit: p.unit,
         supplier: p.supplier, leadTime: p.leadTime, status: p.status,
       })) : (base.procurement || []),
-    }
+    }, projectEstimate)
   }, [docGen, companyLogo, risks, proc, intelligence.data])
 
   const getEstimateInput = useCallback(() => ({
@@ -437,43 +440,83 @@ function AppShellInner({ projState, dispatch }) {
     financialAdjustments: docGen.financialAdjustments,
   }), [intelligence.data, docGen])
 
-  const lockEstimateEverywhere = useCallback((approval) => {
-    const input = getEstimateInput()
-    const locked = lockProjectEstimate(
-      intelligence.data?.projectEstimate || docGen.projectEstimate || {},
-      { ...approval, source: estimateApprovalSource },
-      input,
-    )
+  const syncLockedEstimate = useCallback((locked) => {
+    if (!locked?.locked) return
     intelligence.setData(prev => ({
       ...prev,
       projectEstimate: locked,
       pricing: locked.pricingSnapshot,
-      financialAdjustments: locked.financialAdjustmentsSnapshot,
+      financialAdjustments: locked.financialAdjustmentsSnapshot ?? prev.financialAdjustments,
       metadata: { ...prev.metadata, updatedAt: new Date().toISOString() },
     }))
     docGen.applyLockedEstimate(locked)
-    return locked
-  }, [intelligence, docGen, estimateApprovalSource, getEstimateInput])
+  }, [intelligence, docGen])
 
-  const requestEstimateApproval = useCallback((callback, { source = ESTIMATE_SOURCES.USER_OVERRIDE } = {}) => {
-    const existing = intelligence.data?.projectEstimate
-    if (existing?.locked) {
-      callback(existing)
+  const lockEstimateEverywhere = useCallback((approval, inputOverride = null) => {
+    const input = inputOverride ?? estimateApprovalInput ?? getEstimateInput()
+    const locked = lockProjectEstimate(
+      resolveProjectEstimate(docGen.projectEstimate, intelligence.data?.projectEstimate) || {},
+      { ...approval, source: estimateApprovalSource },
+      input,
+    )
+    syncLockedEstimate(locked)
+    return locked
+  }, [intelligence, docGen, estimateApprovalSource, getEstimateInput, estimateApprovalInput, syncLockedEstimate])
+
+  const requestEstimateApproval = useCallback((callback, { source = ESTIMATE_SOURCES.USER_OVERRIDE, input = null } = {}) => {
+    if (isEstimateLocked(docGen.projectEstimate, intelligence.data?.projectEstimate)) {
+      const resolved = resolveProjectEstimate(docGen.projectEstimate, intelligence.data?.projectEstimate)
+      syncLockedEstimate(resolved)
+      callback(resolved)
       return
     }
+    setEstimateApprovalInput(input)
     setEstimateApprovalSource(source)
     setEstimateApprovalCallback(() => callback)
     setEstimateApprovalOpen(true)
-  }, [intelligence.data?.projectEstimate])
+  }, [docGen.projectEstimate, intelligence.data?.projectEstimate, syncLockedEstimate])
 
   const handleEstimateApprovalConfirm = useCallback((approval) => {
+    approvalRejectRef.current = null
     const locked = lockEstimateEverywhere(approval)
     setEstimateApprovalOpen(false)
+    setEstimateApprovalInput(null)
     const cb = estimateApprovalCallback
     setEstimateApprovalCallback(null)
     cb?.(locked)
     toast.success('Estimate locked', `Approved total: GHS ${Number(locked.approvedTotal).toLocaleString('en')}`)
   }, [lockEstimateEverywhere, estimateApprovalCallback, toast])
+
+  const handleOpenApproveEstimate = useCallback(() => {
+    if (isEstimateLocked(docGen.projectEstimate, intelligence.data?.projectEstimate)) {
+      toast.info('Already locked', 'This estimate is already approved and locked')
+      return
+    }
+    requestEstimateApproval(() => {}, { source: ESTIMATE_SOURCES.USER_OVERRIDE })
+  }, [docGen.projectEstimate, intelligence.data?.projectEstimate, requestEstimateApproval, toast])
+
+  /** Run export/print only after estimate is approved; shows modal when needed. */
+  const runWithEstimateApproval = useCallback((action, { source = ESTIMATE_SOURCES.USER_OVERRIDE, input = null } = {}) => {
+    return new Promise((resolve, reject) => {
+      approvalRejectRef.current = reject
+      requestEstimateApproval((locked) => {
+        approvalRejectRef.current = null
+        Promise.resolve(action(locked))
+          .then(resolve)
+          .catch(reject)
+      }, { source, input })
+    })
+  }, [requestEstimateApproval])
+
+  const cancelEstimateApproval = useCallback(() => {
+    setEstimateApprovalOpen(false)
+    setEstimateApprovalCallback(null)
+    setEstimateApprovalInput(null)
+    if (approvalRejectRef.current) {
+      approvalRejectRef.current(new Error('Approval cancelled'))
+      approvalRejectRef.current = null
+    }
+  }, [])
 
   const handleUnlockEstimate = useCallback(() => {
     const locked = intelligence.data?.projectEstimate || docGen.projectEstimate
@@ -495,12 +538,6 @@ function AppShellInner({ projState, dispatch }) {
     toast.info('Estimate unlocked', 'Edit costs freely — re-approve before exporting')
   }, [intelligence, docGen, getEstimateInput, toast])
 
-  const assertExportAllowed = useCallback(() => {
-    const data = buildExportData()
-    const check = validateEstimateExport(data, data._moduleTotals)
-    if (!check.ok) throw new Error(check.message)
-    return data
-  }, [buildExportData])
 
   const handleUsage = useCallback(({ input, output }) => {
     aiUsage.trackRequest({ inputTokens: input, outputTokens: output })
@@ -875,34 +912,49 @@ function AppShellInner({ projState, dispatch }) {
 
   // ── PDF export from AI extract ────────────────────────────────────────────
   const handlePDFExport = useCallback(async (extract) => {
-    const tid = toast.loading('Generating PDF…')
-    setPdfStatus('Preparing…')
+    const enriched = enrichExtractForExport(extract)
+    const merged = applyExtractNow(enriched, {
+      replaceBoq: ensureBoqRows(enriched).length > 0,
+    })
+
     try {
-      const enriched = enrichExtractForExport(extract)
-      const merged = applyExtractNow(enriched, {
-        replaceBoq: ensureBoqRows(enriched).length > 0,
-      })
-      const style = workflowState.presentationStyle || merged.workflow?.presentationStyle
-      const data = buildPdfExportPayload(merged, enriched, { style })
-      const result = await downloadPDF(
-        data,
-        `${extract.projectTitle || 'estimate'}.pdf`,
-        s => { setPdfStatus(s); toast.update(tid, { body: s }) },
-        companyLogo.getExportLogo(),
-      )
-      if (result?.method === 'html') {
-        toast.done(tid, 'HTML document downloaded', result.message)
-      } else {
-        toast.done(tid, 'PDF downloaded')
-      }
-      logWorkflowAction(WORKFLOW_ACTIONS.EXPORT_PDF, { ok: true, rows: data.boqRows?.length, method: result?.method })
+      return await runWithEstimateApproval(async () => {
+        const tid = toast.loading('Generating PDF…')
+        setPdfStatus('Preparing…')
+        try {
+          const style = workflowState.presentationStyle || merged.workflow?.presentationStyle
+          const base = buildPdfExportPayload(intelligence.data, enriched, { style })
+          const locked = resolveProjectEstimate(docGen.projectEstimate, intelligence.data?.projectEstimate)
+          const data = enrichExportWithEstimate({
+            ...base,
+            logoUrl: companyLogo.getExportLogo(),
+          }, locked)
+          const result = await downloadPDF(
+            data,
+            `${extract.projectTitle || 'estimate'}.pdf`,
+            s => { setPdfStatus(s); toast.update(tid, { body: s }) },
+            data.logoUrl,
+          )
+          if (result?.method === 'html') {
+            toast.done(tid, 'HTML document downloaded', result.message)
+          } else {
+            toast.done(tid, 'PDF downloaded')
+          }
+          logWorkflowAction(WORKFLOW_ACTIONS.EXPORT_PDF, { ok: true, rows: data.boqRows?.length, method: result?.method })
+        } catch (e) {
+          logWorkflowAction(WORKFLOW_ACTIONS.EXPORT_PDF, { ok: false, error: e?.message })
+          toast.fail(tid, 'PDF failed', e?.message || 'Try the DocGen tab instead')
+          throw e
+        } finally {
+          setPdfStatus(null)
+        }
+      }, { source: ESTIMATE_SOURCES.AI_CHAT })
     } catch (e) {
-      logWorkflowAction(WORKFLOW_ACTIONS.EXPORT_PDF, { ok: false, error: e?.message })
-      toast.fail(tid, 'PDF failed', e?.message || 'Try the DocGen tab instead')
-    } finally {
-      setPdfStatus(null)
+      if (e?.message !== 'Approval cancelled') {
+        // errors surfaced via toast in inner handler
+      }
     }
-  }, [toast, companyLogo, workflowState.presentationStyle, applyExtractNow])
+  }, [toast, companyLogo, workflowState.presentationStyle, applyExtractNow, runWithEstimateApproval, intelligence.data, docGen.projectEstimate])
 
   const handleConfirmExtractedPrices = useCallback((items) => {
     setExtractedPrices(items)
@@ -1129,61 +1181,63 @@ function AppShellInner({ projState, dispatch }) {
       toast.warn('Document is empty', 'Add BOQ data or project details before exporting')
       return
     }
-    const runDownload = async () => {
-      const tid = toast.loading('Generating PDF…')
-      setPdfStatus('Preparing document…')
-      try {
-        const data = assertExportAllowed()
-        const result = await downloadPDF(
-          data,
-          `${docGen.meta.quoteNum || 'document'}.pdf`,
-          s => { setPdfStatus(s); toast.update(tid, { body: s }) },
-          data.logoUrl,
-        )
-        if (result.method === 'pdf') {
-          toast.done(tid, 'PDF downloaded', docGen.meta.projectTitle || undefined)
-        } else {
-          toast.done(tid, 'Document saved', result.message || 'HTML export — use Print → Save as PDF')
+    try {
+      await runWithEstimateApproval(async () => {
+        const tid = toast.loading('Generating PDF…')
+        setPdfStatus('Preparing document…')
+        try {
+          const data = buildExportData()
+          const result = await downloadPDF(
+            data,
+            `${docGen.meta.quoteNum || 'document'}.pdf`,
+            s => { setPdfStatus(s); toast.update(tid, { body: s }) },
+            data.logoUrl,
+          )
+          if (result.method === 'pdf') {
+            toast.done(tid, 'PDF downloaded', docGen.meta.projectTitle || undefined)
+          } else {
+            toast.done(tid, 'Document saved', result.message || 'HTML export — use Print → Save as PDF')
+          }
+        } catch (e) {
+          console.error('[export] download failed:', e)
+          const msg = e.message || 'Try Preview then Print'
+          const blocked = msg.includes('mismatch') || msg.includes('approved and locked') || msg.includes('Export blocked')
+          toast.fail(tid, blocked ? 'Export blocked' : 'Export failed', msg)
+          throw e
+        } finally {
+          setPdfStatus(null)
         }
-      } catch (e) {
-        console.error('[export] download failed:', e)
-        const msg = e.message || 'Try Preview then Print'
-        const blocked = msg.includes('mismatch') || msg.includes('approved and locked') || msg.includes('Export blocked')
-        toast.fail(tid, blocked ? 'Export blocked' : 'Export failed', msg)
-      }
-      setPdfStatus(null)
+      }, { source: ESTIMATE_SOURCES.DOC_GEN })
+    } catch {
+      // toast handled above
     }
-    if (!docGen.projectEstimate?.locked && !intelligence.data?.projectEstimate?.locked) {
-      requestEstimateApproval(() => { runDownload() }, { source: ESTIMATE_SOURCES.DOC_GEN })
-      return
-    }
-    await runDownload()
-  }, [docGen, assertExportAllowed, requestEstimateApproval, intelligence.data?.projectEstimate, toast])
+  }, [docGen, buildExportData, runWithEstimateApproval, toast])
 
   const handleDocPrint = useCallback(async () => {
     if (!docGen.hasBOQData && !docGen.meta.projectTitle?.trim()) {
       toast.warn('Document is empty', 'Add BOQ data or project details before printing')
       return
     }
-    const runPrint = async () => {
-      const tid = toast.loading('Opening print preview…')
-      setPdfStatus('Preparing print layout…')
-      try {
-        const data = assertExportAllowed()
-        await printDocument(data, companyLogo.getExportLogo())
-        toast.done(tid, 'Print dialog opened', 'Select your printer or Save as PDF')
-      } catch (e) {
-        console.error('[export] print failed:', e)
-        toast.fail(tid, 'Print failed', e.message || 'Allow popups and try again')
-      }
-      setPdfStatus(null)
+    try {
+      await runWithEstimateApproval(async () => {
+        const tid = toast.loading('Opening print preview…')
+        setPdfStatus('Preparing print layout…')
+        try {
+          const data = buildExportData()
+          await printDocument(data, companyLogo.getExportLogo())
+          toast.done(tid, 'Print dialog opened', 'Select your printer or Save as PDF')
+        } catch (e) {
+          console.error('[export] print failed:', e)
+          toast.fail(tid, 'Print failed', e.message || 'Allow popups and try again')
+          throw e
+        } finally {
+          setPdfStatus(null)
+        }
+      }, { source: ESTIMATE_SOURCES.DOC_GEN })
+    } catch {
+      // toast handled above
     }
-    if (!docGen.projectEstimate?.locked && !intelligence.data?.projectEstimate?.locked) {
-      requestEstimateApproval(() => { runPrint() }, { source: ESTIMATE_SOURCES.DOC_GEN })
-      return
-    }
-    await runPrint()
-  }, [docGen, assertExportAllowed, requestEstimateApproval, intelligence.data?.projectEstimate, companyLogo, toast])
+  }, [docGen, buildExportData, runWithEstimateApproval, companyLogo, toast])
 
   const handleClearForm = useCallback(() => {
     docGen.resetDocument()
@@ -1362,28 +1416,42 @@ function AppShellInner({ projState, dispatch }) {
       toast.warn('Not finalized', 'Finalize the variation before downloading')
       return
     }
-    const tid = toast.loading('Generating revised PDF…')
-    setPdfStatus('Preparing revised document…')
     try {
-      const payload = docGen.buildVariationPreviewPayload(vd.exportStyle)
-      const data = { ...buildExportData(), ...payload, type: payload?.docType || docGen.docType }
-      const ref = docGen.meta.quoteNum || 'revised-document'
-      const result = await downloadPDF(
-        data,
-        `${ref}-rev${vd.revisionNumber || 1}.pdf`,
-        s => { setPdfStatus(s); toast.update(tid, { body: s }) },
-        data.logoUrl,
-      )
-      if (result.method === 'pdf') {
-        toast.done(tid, 'Revised PDF downloaded')
-      } else {
-        toast.done(tid, 'Document saved', result.message)
-      }
-    } catch (e) {
-      toast.fail(tid, 'Export failed', e.message || 'Try Preview then Print')
+      await runWithEstimateApproval(async () => {
+        const tid = toast.loading('Generating revised PDF…')
+        setPdfStatus('Preparing revised document…')
+        try {
+          const payload = docGen.buildVariationPreviewPayload(vd.exportStyle)
+          const locked = resolveProjectEstimate(docGen.projectEstimate, intelligence.data?.projectEstimate)
+          const data = enrichExportWithEstimate({
+            ...buildExportData(),
+            ...payload,
+            type: payload?.docType || docGen.docType,
+            logoUrl: companyLogo.getExportLogo(),
+          }, locked)
+          const ref = docGen.meta.quoteNum || 'revised-document'
+          const result = await downloadPDF(
+            data,
+            `${ref}-rev${vd.revisionNumber || 1}.pdf`,
+            s => { setPdfStatus(s); toast.update(tid, { body: s }) },
+            data.logoUrl,
+          )
+          if (result.method === 'pdf') {
+            toast.done(tid, 'Revised PDF downloaded')
+          } else {
+            toast.done(tid, 'Document saved', result.message)
+          }
+        } catch (e) {
+          toast.fail(tid, 'Export failed', e.message || 'Try Preview then Print')
+          throw e
+        } finally {
+          setPdfStatus(null)
+        }
+      }, { source: ESTIMATE_SOURCES.VARIATION })
+    } catch {
+      // toast handled above
     }
-    setPdfStatus(null)
-  }, [docGen, buildExportData, toast])
+  }, [docGen, buildExportData, runWithEstimateApproval, intelligence.data?.projectEstimate, companyLogo, toast])
 
   const handleSaveVariationSeparately = useCallback(async () => {
     const vd = docGen.variationDraft
@@ -1450,27 +1518,37 @@ function AppShellInner({ projState, dispatch }) {
   }, [docGen, refreshSavedDocuments, toast])
 
   const handleExportSavedDocument = useCallback(async (doc) => {
-    const tid = toast.loading('Generating PDF…')
-    setPdfStatus('Preparing document…')
+    const snapshotInput = estimateInputFromSnapshot(doc.snapshot)
     try {
-      const data = {
-        ...doc.snapshot,
-        type: doc.snapshot.docType,
-        exportedAt: new Date().toISOString(),
-        logoUrl: companyLogo.getExportLogo(),
-      }
-      await downloadPDF(
-        data,
-        `${doc.name}.pdf`,
-        s => { setPdfStatus(s); toast.update(tid, { body: s }) },
-        data.logoUrl,
-      )
-      toast.done(tid, 'PDF downloaded', doc.name)
-    } catch (e) {
-      toast.fail(tid, 'Export failed', e.message || 'Try opening the document first')
+      await runWithEstimateApproval(async () => {
+        const tid = toast.loading('Generating PDF…')
+        setPdfStatus('Preparing document…')
+        try {
+          const locked = resolveProjectEstimate(docGen.projectEstimate, intelligence.data?.projectEstimate)
+          const data = enrichExportWithEstimate({
+            ...doc.snapshot,
+            type: doc.snapshot.docType,
+            exportedAt: new Date().toISOString(),
+            logoUrl: companyLogo.getExportLogo(),
+          }, locked)
+          await downloadPDF(
+            data,
+            `${doc.name}.pdf`,
+            s => { setPdfStatus(s); toast.update(tid, { body: s }) },
+            data.logoUrl,
+          )
+          toast.done(tid, 'PDF downloaded', doc.name)
+        } catch (e) {
+          toast.fail(tid, 'Export failed', e.message || 'Try opening the document first')
+          throw e
+        } finally {
+          setPdfStatus(null)
+        }
+      }, { source: ESTIMATE_SOURCES.PROJECT, input: snapshotInput })
+    } catch {
+      // toast handled above
     }
-    setPdfStatus(null)
-  }, [companyLogo, toast])
+  }, [docGen.projectEstimate, intelligence.data?.projectEstimate, runWithEstimateApproval, companyLogo, toast])
 
   const handleDocPreview = useCallback(async () => {
     if (!docGen.hasBOQData && !docGen.meta.projectTitle?.trim()) {
@@ -1618,6 +1696,7 @@ function AppShellInner({ projState, dispatch }) {
             onSendToDocGen={handleBOQToDocGen}
             onAIReview={(rows) => firePrompt(buildBOQReviewPrompt(rows))}
             onUnlockEstimate={handleUnlockEstimate}
+            onApproveEstimate={handleOpenApproveEstimate}
             aiBusy={chat.busy}
           />
         )}
@@ -1650,6 +1729,7 @@ function AppShellInner({ projState, dispatch }) {
             onClearForm={handleClearForm}
             onStartNewDocument={handleStartNewDocument}
             onUnlockEstimate={handleUnlockEstimate}
+            onApproveEstimate={handleOpenApproveEstimate}
             onAIFill={() => firePrompt('Auto-fill my document from the current BOQ context. Generate professional scope, materials, and labor. Do NOT modify or suggest payment terms — those are controlled by the user.')}
             toast={toast}
             pdfStatus={pdfStatus}
@@ -1776,7 +1856,7 @@ function AppShellInner({ projState, dispatch }) {
 
       <EstimateApprovalDialog
         open={estimateApprovalOpen}
-        onClose={() => { setEstimateApprovalOpen(false); setEstimateApprovalCallback(null) }}
+        onClose={cancelEstimateApproval}
         onConfirm={handleEstimateApprovalConfirm}
         directCostTotal={
           intelligence.data?.pricing?.layers?.projectSubtotal

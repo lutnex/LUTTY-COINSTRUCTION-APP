@@ -60,7 +60,7 @@ export default function EstimateApprovalDialog({
   return (
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(7,10,13,.85)', backdropFilter: 'blur(4px)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 330,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100,
     }}>
       <div style={{
         background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12,

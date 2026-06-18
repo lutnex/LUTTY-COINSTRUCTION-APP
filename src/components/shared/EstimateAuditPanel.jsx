@@ -13,7 +13,7 @@ const SOURCE_LABELS = {
   project: 'Project',
 }
 
-export default function EstimateAuditPanel({ projectEstimate, compact = false, onUnlock }) {
+export default function EstimateAuditPanel({ projectEstimate, compact = false, onUnlock, onApprove }) {
   const [unlockConfirm, setUnlockConfirm] = useState(false)
   const audit = buildAuditPanelData(projectEstimate)
   if (!audit) return null
@@ -43,7 +43,7 @@ export default function EstimateAuditPanel({ projectEstimate, compact = false, o
         <div style={{ fontFamily: "'Bebas Neue'", fontSize: 14, letterSpacing: 1, color: C.amber }}>
           Cost Audit Panel
         </div>
-        {audit.locked && (
+        {audit.locked ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{
               fontSize: 10, color: C.amber, background: C.amberGlow,
@@ -65,6 +65,18 @@ export default function EstimateAuditPanel({ projectEstimate, compact = false, o
               </button>
             )}
           </div>
+        ) : onApprove && (
+          <button
+            type="button"
+            onClick={onApprove}
+            style={{
+              fontSize: 10, color: '#070A0D', background: C.amber,
+              border: 'none', borderRadius: 12, padding: '4px 12px',
+              cursor: 'pointer', fontFamily: 'DM Sans', fontWeight: 600,
+            }}
+          >
+            Approve &amp; Lock
+          </button>
         )}
       </div>
 

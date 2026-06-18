@@ -763,6 +763,12 @@ export async function generatePDF(data, logoUrl) {
 }
 
 export async function printDocument(data, logoUrl) {
+  const estimateCheck = validateEstimateExport(data, data._moduleTotals)
+  if (!estimateCheck.ok) {
+    exportLog('validation', { blocked: true, reason: estimateCheck.message, mismatches: estimateCheck.mismatches })
+    throw new Error(estimateCheck.message)
+  }
+
   exportLog('dom-rendering', 'Building preview HTML for print…')
   const html = buildDocumentHTML(data, logoUrl)
   const win = window.open('', '_blank', 'noopener,noreferrer,width=920,height=1100')
