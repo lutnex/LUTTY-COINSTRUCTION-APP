@@ -1,12 +1,12 @@
-import { useState } from 'react'
+import { useState, Fragment } from 'react'
 import { C } from '../../utils/constants.js'
 import { Button } from './Button.jsx'
 import { APPROVAL_MODES } from '../../utils/projectEstimate.js'
-import { BREAKDOWN_LABELS } from '../../services/pricing/directCostBreakdown.js'
+import { BREAKDOWN_LABELS, DIRECT_COST_ONLY_KEYS } from '../../services/pricing/directCostBreakdown.js'
 import { fmtN } from '../../utils/formatters.js'
 
 const MODE_OPTIONS = [
-  { id: APPROVAL_MODES.DIRECT_ONLY, label: 'Direct Cost Only', desc: 'Sum of imported BOQ values only. No hidden commercials.' },
+  { id: APPROVAL_MODES.DIRECT_ONLY, label: 'Direct Cost Only', desc: 'Materials + Labour + Earthworks + Filling + Transport + Preliminaries only.' },
   { id: APPROVAL_MODES.PRELIMINARIES, label: 'Add Preliminaries', desc: 'Include explicit preliminaries already in the estimate.' },
   { id: APPROVAL_MODES.OVERHEADS, label: 'Add Overheads', desc: 'Apply contractor overheads percentage on subtotal.' },
   { id: APPROVAL_MODES.PROFIT, label: 'Add Profit', desc: 'Apply contractor profit percentage on subtotal.' },
@@ -14,10 +14,7 @@ const MODE_OPTIONS = [
   { id: APPROVAL_MODES.CUSTOM, label: 'Custom %', desc: 'Set custom percentages for each commercial item.' },
 ]
 
-const DISPLAY_KEYS = [
-  'materials', 'labour', 'earthworks', 'filling', 'transport',
-  'preliminaries', 'overheads', 'profit', 'contingency', 'equipment', 'other',
-]
+const EXTRA_KEYS = ['equipment', 'other', 'overheads', 'profit', 'contingency']
 
 export default function EstimateApprovalDialog({
   open,
@@ -41,6 +38,8 @@ export default function EstimateApprovalDialog({
   const categories = breakdown?.categories || {}
   const formula = breakdown?.formula
   const dedupeNotes = breakdown?.dedupeNotes || []
+  const warnings = breakdown?.warnings || []
+  const auditLog = breakdown?.auditLog || []
   const displayTotal = breakdown?.directTotal ?? directCostTotal
 
   const toggleMode = (mode) => {
@@ -76,7 +75,7 @@ export default function EstimateApprovalDialog({
     }}>
       <div style={{
         background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12,
-        padding: 24, width: 580, maxWidth: '94vw', maxHeight: '90vh', overflowY: 'auto',
+        padding: 24, width: 620, maxWidth: '94vw', maxHeight: '90vh', overflowY: 'auto',
       }}>
         <div style={{ fontFamily: "'Bebas Neue'", fontSize: 22, color: C.amber, letterSpacing: '1.5px', marginBottom: 4 }}>
           {title}
@@ -92,15 +91,49 @@ export default function EstimateApprovalDialog({
           </span>
         </div>
 
+        {warnings.length > 0 && (
+          <div style={{
+            background: 'rgba(220,80,60,.12)', border: '1px solid rgba(220,80,60,.35)',
+            borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 11, color: '#F0A090',
+          }}>
+            {warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
+          </div>
+        )}
+
+        <div style={{
+          background: C.carbon, border: `1px solid ${C.border}`, borderRadius: 8,
+          padding: '12px 14px', marginBottom: 12,
+        }}>
+          <div style={{ fontSize: 11, color: C.textDim, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+            Calculation Audit
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '4px 12px', fontSize: 11 }}>
+            <div style={{ color: C.textFaint, fontWeight: 600 }}>Source</div>
+            <div style={{ color: C.textFaint, fontWeight: 600, textAlign: 'right' }}>Value</div>
+            <div style={{ color: C.textFaint, fontWeight: 600, textAlign: 'right' }}>Origin</div>
+            {auditLog.map(row => (
+              <Fragment key={row.category}>
+                <div style={{ color: C.textDim }}>{row.label}</div>
+                <div style={{ fontFamily: "'IBM Plex Mono'", textAlign: 'right', color: row.value > 0 ? C.text : C.textFaint }}>
+                  GHS {fmtN(row.value)}
+                </div>
+                <div style={{ textAlign: 'right', color: C.textFaint, fontSize: 10 }}>
+                  {row.origin}
+                </div>
+              </Fragment>
+            ))}
+          </div>
+        </div>
+
         <div style={{
           background: C.carbon, border: `1px solid ${C.border}`, borderRadius: 8,
           padding: '12px 14px', marginBottom: 16,
         }}>
           <div style={{ fontSize: 11, color: C.textDim, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
-            Cost Breakdown (Debug)
+            Cost Breakdown
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {DISPLAY_KEYS.map(key => (
+            {[...DIRECT_COST_ONLY_KEYS, ...EXTRA_KEYS].map(key => (
               <div key={key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                 <span style={{ color: C.textDim }}>{BREAKDOWN_LABELS[key]}</span>
                 <span style={{ fontFamily: "'IBM Plex Mono'", color: categories[key] > 0 ? C.text : C.textFaint }}>

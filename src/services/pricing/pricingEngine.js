@@ -53,19 +53,14 @@ export function computePricing(input = {}) {
     prelims,
   })
 
-  const { categories, directTotal, dedupeNotes } = breakdown
+  const { categories, directTotal, dedupeNotes, warnings } = breakdown
 
   const matWorks = categories.materials || 0
   const labWorks = categories.labour || 0
-  const equipWorks = (categories.equipment || 0) + (categories.transport || 0)
+  const equipWorks = categories.equipment || 0
+  const transportWorks = (categories.transport || 0) + equipWorks
   const prelimExplicit = categories.preliminaries || 0
-  const rawWorks = (categories.earthworks || 0)
-    + (categories.filling || 0)
-    + (categories.other || 0)
-    + matWorks
-    + labWorks
-    + equipWorks
-    + prelimExplicit
+  const rawWorks = directTotal
 
   const projectSubtotal = directTotal
 
@@ -107,6 +102,7 @@ export function computePricing(input = {}) {
     finalEstimate,
     breakdown: categories,
     dedupeNotes,
+    warnings: warnings || [],
   }
 
   const summary = {
@@ -114,7 +110,7 @@ export function computePricing(input = {}) {
     mat: matWorks,
     boq: sumRowAmounts(boqRows),
     labour: labWorks,
-    equipment: equipWorks,
+    equipment: transportWorks,
     prelims: prelimExplicit,
     projectSubtotal,
     cont: adjustmentResult.lines.find(l => l.id === 'contingency')?.amount || 0,

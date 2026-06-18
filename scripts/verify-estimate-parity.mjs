@@ -173,5 +173,34 @@ test('stale docGen prelims are not added when BOQ already contains preliminaries
   assert(Math.abs(breakdown.directTotal - 5580) < 0.02, `expected 5580 not double prelims, got ${breakdown.directTotal}`)
 })
 
+test('material schedule rows under BOQ bill sections do not inflate Other', () => {
+  const materials = [{ amount: 69617, desc: 'Materials total' }]
+  const labor = [{ amount: 18969, trade: 'Masonry' }]
+  const boqRows = [
+    { section: 'Earthworks', amount: 3600 },
+    { section: 'Filling Works', amount: 1500 },
+    { section: 'Transport', amount: 1000 },
+    { section: 'Preliminaries', amount: 4580 },
+    { section: 'Bill 2 — Substructure', desc: 'Cement bags', amount: 30000, source: 'ai-material' },
+    { section: 'Bill 2 — Substructure', desc: 'Reinforcement', amount: 39617, source: 'ai-material' },
+    { section: 'Labour — Masonry', amount: 18969, source: 'ai-labor' },
+  ]
+  const breakdown = buildApprovalBreakdown({ boqRows, materials, labor })
+  assert(breakdown.categories.other === 0, `Other must be 0, got ${breakdown.categories.other}`)
+  assert(Math.abs(breakdown.categories.materials - 69617) < 0.02)
+  assert(Math.abs(breakdown.directTotal - 99266) < 0.02, `expected 99266, got ${breakdown.directTotal}`)
+})
+
+test('BOQ bill rows matching material schedule total do not inflate Other', () => {
+  const materials = [{ amount: 69617, desc: 'Materials total' }]
+  const boqRows = [
+    { section: 'Bill 1 — Superstructure', desc: 'Combined materials', amount: 69617 },
+  ]
+  const breakdown = buildApprovalBreakdown({ boqRows, materials })
+  assert(breakdown.categories.other === 0, `Other must be 0, got ${breakdown.categories.other}`)
+  assert(Math.abs(breakdown.categories.materials - 69617) < 0.02)
+  assert(Math.abs(breakdown.directTotal - 69617) < 0.02)
+})
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)
