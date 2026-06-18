@@ -6,8 +6,13 @@ import { inferMaterialCategory, normalizeMaterialState } from '../../utils/mater
 import { detectWorkflowPhaseFromText, PRICE_SOURCES, shouldHoldAutoMerge } from '../../utils/qsWorkflow.js'
 import { extractAgreedPricesFromText } from '../../utils/priceExtraction.js'
 import { parseVariationTableFromText } from '../../utils/variationAIParser.js'
+import {
+  classifyTableSection,
+  getSectionTitleBefore,
+  isCommercialSummaryRow,
+} from '../../utils/chatExtract.js'
 
-function parseTableRows(tableBlock, defaultSection = 'General') {
+function parseTableRows(tableBlock, defaultSection = 'General', { kind = 'boq', sectionTitle = '' } = {}) {
   const rows = []
   const lines = tableBlock.trim().split('\n').filter(Boolean)
   if (!lines.length) return rows
@@ -25,43 +30,60 @@ function parseTableRows(tableBlock, defaultSection = 'General') {
   }
 
   const refI = idx('item ref', 'item', 'ref', 'no', '#')
-  const secI = idx('section', 'trade', 'bill')
+  const secI = idx('section', 'bill', 'category', 'trade')
+  const tradeI = idx('trade')
   const descI = idx('desc', 'item', 'work', 'material', 'name', 'description')
   const unitI = idx('unit')
   const qtyI = idx('qty', 'quan')
   const rateI = idx('rate', 'price')
   const amtI = idx('amount', 'total', 'ghs', 'cost')
 
-  if (descI < 0 && headers.length < 2) return rows
+  if (descI < 0 && tradeI < 0 && headers.length < 2) return rows
 
   let id = Date.now()
   for (const row of dataLines) {
     const cols = row.split('|').map(c => c.trim()).filter(Boolean)
     if (cols.length < 2) continue
     const get = (i) => (i >= 0 && i < cols.length ? cols[i] : '')
-    const desc = get(descI >= 0 ? descI : 1)
+    const trade = get(tradeI)
+    const desc = get(descI >= 0 ? descI : (tradeI >= 0 ? tradeI : 1))
     if (!desc || desc.length < 2 || /^[-=]+$/.test(desc)) continue
-    if (/^(bill|collection|carried|total|subtotal)/i.test(desc)) continue
+    if (isCommercialSummaryRow(desc, { sectionKind: kind === 'commercial' ? 'commercial' : undefined })) continue
+    if (/^(bill|collection|carried|total|subtotal)/i.test(desc) && kind !== 'boq') continue
 
     const q = get(qtyI).replace(/[^\d.]/g, '')
     const r = get(rateI).replace(/[^\d.]/g, '')
     const rawAmt = get(amtI).replace(/[^\d.]/g, '')
     const amt = rawAmt || (q && r ? String(Math.round(parseFloat(q) * parseFloat(r) * 100) / 100) : '')
 
-    rows.push({
+    const section = kind === 'material'
+      ? inferMaterialCategory(desc, get(secI) || sectionTitle || defaultSection)
+      : kind === 'labor'
+        ? (get(secI) || `Labour — ${trade || 'General'}`)
+        : inferMaterialCategory(desc, get(secI) || defaultSection)
+
+    const base = {
       id: id++,
       itemRef: get(refI) || '',
-      section: inferMaterialCategory(desc, get(secI) || defaultSection),
+      section,
       desc,
       specification: /\[ASSUMPTION/i.test(desc) ? desc : '',
-      unit: get(unitI) || 'nr',
+      unit: get(unitI) || (kind === 'commercial' ? 'sum' : 'nr'),
       qty: q,
       rate: r,
       amount: amt,
       clientSupplied: /client|pc sum|prime cost/i.test(row),
       priceSource: r ? (/saved rate|user price|confirmed/i.test(row) ? PRICE_SOURCES.USER : PRICE_SOURCES.ASSUMPTION) : PRICE_SOURCES.PENDING,
       priceConfirmed: /confirmed|user price|saved rate/i.test(row),
-    })
+      _sectionKind: kind,
+      _sectionTitle: sectionTitle,
+    }
+
+    if (kind === 'labor') {
+      rows.push({ ...base, trade: trade || desc })
+    } else {
+      rows.push(base)
+    }
   }
   return rows
 }
@@ -140,6 +162,7 @@ export function parseAIResponse(text) {
   while ((tm = tableRx.exec(text)) !== null) {
     const tableStart = tm.index
     const header = tm[1].toLowerCase()
+    const sectionTitle = getSectionTitleBefore(text, tableStart)
 
     // Section context from nearest preceding bill header
     for (let i = billPositions.length - 1; i >= 0; i--) {
@@ -150,13 +173,20 @@ export function parseAIResponse(text) {
     }
 
     const block = `|${tm[1]}|\n| --- |\n${tm[2]}`
-    const rows = parseTableRows(block, currentBill)
+    const tableKind = classifyTableSection(sectionTitle, tm[1])
 
-    if (header.includes('material')) {
+    if (tableKind === 'commercial') {
+      // Totals only — do not import as line items
+      continue
+    }
+
+    const rows = parseTableRows(block, currentBill, { kind: tableKind, sectionTitle })
+
+    if (tableKind === 'material' || header.includes('material')) {
       materials.push(...rows)
-    } else if (header.includes('labour') || header.includes('labor') || header.includes('trade')) {
+    } else if (tableKind === 'labor' || header.includes('labour') || header.includes('labor') || (header.includes('trade') && !header.includes('item ref'))) {
       labor.push(...rows)
-    } else if (header.includes('risk') && header.includes('rating')) {
+    } else if (tableKind === 'risk' && header.includes('rating')) {
       for (const r of rows) {
         const rating = /high/i.test(r.desc + r.section) ? 'HIGH'
           : /low/i.test(r.desc + r.section) ? 'LOW' : 'MEDIUM'
@@ -220,13 +250,13 @@ export function parseAIResponse(text) {
   const collections = extractCollections(text)
 
   const hasEstimate = Boolean(contractSum) || /contract\s+sum|estimate\s+total/i.test(text)
-  const hasBOQ = boqRows.length > 2
+  const hasBOQ = boqRows.length > 2 || materials.length > 2 || labor.length > 1
   const hasRisks = risks.length > 0 || /RISK\s+REGISTER|RISKS\s+AND\s+EXCLUSIONS/i.test(text)
   const confidence = (boqRows.length > 15 && contractSum) ? 'high'
     : (boqRows.length > 5 || contractSum) ? 'medium'
     : 'low'
 
-  if (import.meta.env.DEV) {
+  if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
     console.log('[BOQ Parser]', {
       boqRows: boqRows.length,
       materials: materials.length,

@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node scripts/verify-workflow.mjs; node scripts/verify-calculators.mjs",
+    "test": "node scripts/verify-workflow.mjs; node scripts/verify-calculators.mjs; node scripts/verify-export-parity.mjs; node scripts/verify-chat-import.mjs",
     "migrate:documents": "node scripts/migrate-local-documents.mjs"
   },
   "dependencies": {

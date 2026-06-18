@@ -6,6 +6,7 @@ import { mergeExtractIntoProjectData, projectDataToDocPayload } from './projectI
 import { applyPresentationStyle, PRESENTATION_STYLES } from './qsWorkflow.js'
 import { normalizeDocumentSectionsForExport } from './documentSections.js'
 import { parseAIResponse } from '../services/ai/responseParser.js'
+import { consolidateExtractForImport } from './chatExtract.js'
 
 export const WORKFLOW_ACTIONS = {
   IMPORT_BOQ: 'import-boq',
@@ -188,12 +189,13 @@ export function enrichExtractForExport(extract) {
   }
 
   const boqRows = pickNonEmpty(ensureBoqRows(extract), ensureBoqRows(reparsed))
-  return {
+  const merged = consolidateExtractForImport({
     ...reparsed,
     ...extract,
     sourceText,
     boqRows,
     materials: pickNonEmpty(extract.materials, reparsed.materials),
+    matCategories: pickNonEmpty(extract.matCategories, reparsed.matCategories),
     labor: pickNonEmpty(extract.labor, reparsed.labor),
     assumptions: pickNonEmpty(extract.assumptions, reparsed.assumptions),
     exclusions: pickNonEmpty(extract.exclusions, reparsed.exclusions),
@@ -203,8 +205,17 @@ export function enrichExtractForExport(extract) {
     projectDescription: extract.projectDescription || reparsed.projectScope,
     contractSum: extract.contractSum || reparsed.contractSum,
     takeoffNotes: extract.takeoffNotes || reparsed.takeoffNotes,
-    hasBOQ: Boolean(extract.hasBOQ || reparsed.hasBOQ || boqRows.length > 2),
+    hasBOQ: Boolean(extract.hasBOQ || reparsed.hasBOQ || boqRows.length > 2 || reparsed.materials?.length > 2 || reparsed.labor?.length > 1),
     hasEstimate: Boolean(extract.hasEstimate || reparsed.hasEstimate || extract.contractSum || reparsed.contractSum),
+  })
+
+  return {
+    ...merged,
+    boqRows: merged.boqRows,
+    materials: merged.materials,
+    matCategories: merged.matCategories,
+    labor: merged.labor,
+    hasBOQ: merged.counts?.total > 2 || merged.boqRows?.length > 2,
   }
 }
 
@@ -261,7 +272,7 @@ export function buildPdfExportPayload(merged, extract, { style, docType = 'estim
     hasBoq: boqRows.length > 0,
   })
 
-  if (import.meta.env.DEV) {
+  if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
     console.log('[PDF Export]', {
       boqRows: boqRows.length,
       assumptions: assumptions.length,

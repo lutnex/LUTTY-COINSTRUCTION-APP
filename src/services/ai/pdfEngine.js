@@ -26,6 +26,11 @@ import {
   buildMetaGrid,
 } from '../../utils/deLuteroitsDocumentTemplate.js'
 import { downloadHtmlAsPdf } from '../../utils/htmlToPdf.js'
+import {
+  countDocumentExportItems,
+  validateExportItemParity,
+  EXPORT_INCOMPLETE_MESSAGE,
+} from '../../utils/exportItemCounts.js'
 
 const LOG_PREFIX = '[pdf-export]'
 
@@ -367,6 +372,7 @@ export function buildDocumentHTML(data, logoUrl) {
   const bodyHtml = `
     ${orderedBodyHtml ? '' : metaHtml}
     ${orderedBodyHtml || [executiveHtml, scopeHtml, takeoffHtml, assumptionsHtml, exclusionsHtml, boqHtml, matsHtml, laborHtml, prelimsHtml, risksHtml, procHtml, variationHtml, commercialHtml, paymentHtml, notesHtml, legacyBodyHtml].join('')}
+    ${orderedBodyHtml && variationHtml ? variationHtml : ''}
     ${buildSignatureBlock(d.company)}
     ${buildDocumentFooter(d.company)}`
 
@@ -674,6 +680,25 @@ export async function generatePDF(data, logoUrl) {
     }
   }
 
+  if (d.variations?.length && !getEnabledSections(documentSections).some(s => s.type === 'variations')) {
+    autoTable(
+      ['Ref', 'Change', 'Description', 'Orig Qty', 'Rev Qty', 'Unit', 'Orig Rate', 'Rev Rate', 'Variation +/-', 'Reason'],
+      d.variations.map(r => [
+        r.originalItemRef || r.itemNo || '',
+        (r.changeType || '').replace(/_/g, ' '),
+        r.description || r.desc || '',
+        r.originalQty || '',
+        r.revisedQty || '',
+        r.unit || '',
+        fmtN(parseFloat(r.originalRate)),
+        fmtN(parseFloat(r.revisedRate)),
+        fmtN(parseFloat(r.difference)),
+        r.reason || '',
+      ]),
+      meta.revisionNumber ? `Revision ${meta.revisionNumber}` : 'Variation Schedule',
+    )
+  }
+
   chk(35)
   secHdr('Signatures')
   doc.setFontSize(8)
@@ -734,13 +759,49 @@ export async function printDocument(data, logoUrl) {
   })
 }
 
+function logExportCounts(enriched, previewHtml, extra = {}) {
+  const counts = countDocumentExportItems(enriched)
+  const parity = validateExportItemParity(enriched, previewHtml)
+  exportLog('document-state', {
+    totalCategories: counts.totalCategories,
+    materialRows: counts.materialRows,
+    laborRows: counts.laborRows,
+    variationRows: counts.variationRows,
+    boqRows: counts.boqRows,
+    prelimRows: counts.prelimRows,
+    totalLineItems: counts.totalLineItems,
+    htmlDataRows: parity.rendered.dataRows,
+    ...extra,
+  })
+  return { counts, parity }
+}
+
+function assertExportComplete(counts, exportedRows, source) {
+  if (counts.totalLineItems > 0 && exportedRows < counts.totalLineItems) {
+    exportLog('validation', {
+      blocked: true,
+      source,
+      expected: counts.totalLineItems,
+      exported: exportedRows,
+    })
+    throw new Error(EXPORT_INCOMPLETE_MESSAGE)
+  }
+}
+
 export async function downloadPDF(data, filename, onProgress, logoUrl) {
   onProgress?.('Preparing document…')
   const logo = logoUrl || resolveLogoUrl()
   const enriched = enrichExportData(data, logo)
 
-  exportLog('dom-rendering', 'Building preview HTML for parity check…')
+  exportLog('dom-rendering', 'Building export HTML from full document state…')
   const previewHtml = buildDocumentHTML(enriched, logo)
+
+  const { counts, parity } = logExportCounts(enriched, previewHtml)
+  if (!parity.ok) {
+    exportLog('dom-rendering', { warning: 'HTML parity gaps before PDF capture', errors: parity.errors })
+    throw new Error(EXPORT_INCOMPLETE_MESSAGE)
+  }
+
   const validation = validateExportDocument(enriched, previewHtml)
   if (!validation.ok) {
     exportLog('dom-rendering', { warning: 'Preview/HTML section gaps', errors: validation.errors })
@@ -749,28 +810,42 @@ export async function downloadPDF(data, filename, onProgress, logoUrl) {
   }
 
   onProgress?.('Generating PDF…')
-  exportLog('pdf-generation', 'HTML-to-PDF via html2canvas (no third-party watermarks)')
+  exportLog('pdf-generation', 'HTML-to-PDF via html2canvas (full document height, chunked if needed)')
   const htmlResult = await downloadHtmlAsPdf(
     previewHtml,
     filename.endsWith('.pdf') ? filename : `${filename}.pdf`,
     onProgress,
+    { expectedDataRows: counts.totalLineItems },
   )
   if (htmlResult.ok) {
-    exportLog('file-saving', { filename, method: 'html2canvas' })
+    assertExportComplete(counts, htmlResult.exportedDataRows ?? parity.rendered.dataRows, 'html2canvas')
+    exportLog('file-saving', {
+      filename,
+      method: 'html2canvas',
+      pageCount: htmlResult.pageCount,
+      rowsExportedToPdf: htmlResult.exportedDataRows,
+    })
     return { ok: true, method: 'pdf' }
   }
 
+  exportLog('pdf-generation', { html2canvasFailed: htmlResult.error })
+
   try {
-    exportLog('pdf-generation', 'Falling back to jsPDF autoTable export')
+    exportLog('pdf-generation', 'Falling back to jsPDF autoTable export (full document state)')
     const bytes = await generatePDF(enriched, logo)
     if (bytes) {
       onProgress?.('Saving PDF…')
-      exportLog('file-saving', { filename, bytes: bytes.byteLength })
+      exportLog('file-saving', {
+        filename,
+        bytes: bytes.byteLength,
+        rowsExportedToPdf: counts.totalLineItems,
+      })
       const blob = new Blob([bytes], { type: 'application/pdf' })
       triggerDownload(blob, filename.endsWith('.pdf') ? filename : `${filename}.pdf`)
       return { ok: true, method: 'pdf-fallback' }
     }
   } catch (e) {
+    if (e.message === EXPORT_INCOMPLETE_MESSAGE) throw e
     exportLog('pdf-generation', { error: e.message })
     console.error(`${LOG_PREFIX} PDF generation failed:`, e)
   }

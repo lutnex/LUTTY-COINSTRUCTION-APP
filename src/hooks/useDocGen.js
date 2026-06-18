@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { today } from '../utils/formatters.js'
 import { hydrateBOQDocument, loadDocGenDraft, persistDocGenState, clearDocGenDraft } from '../utils/boqWorkflow.js'
+import { consolidateExtractForImport } from '../utils/chatExtract.js'
 import { computePricing } from '../services/pricing/pricingEngine.js'
 import { normalizeBoqRow } from '../utils/boqItemFactory.js'
 import {
@@ -314,11 +315,13 @@ export function useDocGen(estimatePreferences = null) {
   }, [estimatePreferences])
 
   const fillFromExtract = useCallback((extract) => {
-    if (extract.materials?.length || extract.matCategories?.length) {
-      setMaterialState(extract.matCategories || [], extract.materials || [])
+    const consolidated = consolidateExtractForImport(extract)
+    if (consolidated.materials?.length || consolidated.matCategories?.length) {
+      setMaterialState(consolidated.matCategories || [], consolidated.materials || [])
     }
-    if (extract.boqRows?.length) {
-      setBoqRows(extract.boqRows.map((r, i) => normalizeBoqRow(r, i)))
+    if (consolidated.boqItems?.length || consolidated.boqRows?.length) {
+      const rows = consolidated.boqItems?.length ? consolidated.boqItems : consolidated.boqRows
+      setBoqRows(rows.map((r, i) => normalizeBoqRow(r, i)))
       setDocType('boq')
     }
     if (extract.projectTitle || extract.projectScope) {
@@ -330,12 +333,12 @@ export function useDocGen(estimatePreferences = null) {
         projectLocation: extract.projectLocation || m.projectLocation,
       }))
     }
-    if (extract.labor?.length) setLabor(extract.labor)
+    if (consolidated.labor?.length) setLabor(consolidated.labor)
     if (extract.contractSum) setContractSum(0)
     setExtras({
-      assumptions: extract.assumptions || [],
-      exclusions: extract.exclusions || [],
-      provisional: extract.provisional || [],
+      assumptions: consolidated.assumptions || extract.assumptions || [],
+      exclusions: consolidated.exclusions || extract.exclusions || [],
+      provisional: consolidated.provisional || extract.provisional || [],
       optionalItems: [],
       clientSuppliedItems: [],
       drawingAnalysis: { takeoffNotes: extract.takeoffNotes || '' },

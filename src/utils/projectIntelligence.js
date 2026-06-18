@@ -4,6 +4,7 @@ import { normalizeBoqRow } from './boqItemFactory.js'
 import { computePricing } from '../services/pricing/pricingEngine.js'
 import { resolveInitialPaymentTerms, normalizePaymentTerms } from './paymentTerms.js'
 import { normalizeMaterialState } from './materialCategories.js'
+import { consolidateExtractForImport } from './chatExtract.js'
 
 export const INTELLIGENCE_STORAGE_KEY = 'constructiq-project-intelligence'
 
@@ -47,15 +48,32 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
   const base = prev ? { ...prev } : emptyProjectData()
   if (!extract) return base
 
-  const incomingRows = Array.isArray(extract.boqRows) ? extract.boqRows : []
+  const source = {
+    ...extract,
+    boqRows: extract.boqRows?.length
+      ? extract.boqRows
+      : (replaceBoq ? [] : (base.boqItems || [])),
+    materials: extract.materials?.length ? extract.materials : (base.materials || []),
+    matCategories: extract.matCategories?.length ? extract.matCategories : (base.matCategories || []),
+    labor: extract.labor?.length ? extract.labor : (base.labor || []),
+    assumptions: extract.assumptions?.length ? extract.assumptions : (base.assumptions || []),
+    exclusions: extract.exclusions?.length ? extract.exclusions : (base.exclusions || []),
+    provisional: extract.provisional?.length ? extract.provisional : (base.provisional || []),
+  }
+
+  const consolidated = consolidateExtractForImport(source)
+  const incomingRows = consolidated.boqItems?.length
+    ? consolidated.boqItems
+    : (consolidated.boqRows || []).map((r, i) => normalizeBoqRow({ ...r, source: 'ai' }, i))
+
   const baseItems = Array.isArray(base.boqItems) ? base.boqItems : []
   const boqItems = (replaceBoq ? incomingRows : [...baseItems, ...incomingRows])
-    .map((r, i) => normalizeBoqRow({ ...r, source: 'ai' }, i))
+    .map((r, i) => normalizeBoqRow({ ...r, source: r.source || 'ai' }, i))
 
   const dedupe = []
   const seen = new Set()
   for (const r of boqItems) {
-    const key = `${r.section}|${r.desc}`.toLowerCase()
+    const key = `${r.section}|${r.trade || ''}|${r.desc}`.toLowerCase()
     if (seen.has(key) && r.source === 'ai') continue
     seen.add(key)
     dedupe.push(r)
@@ -63,8 +81,8 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
 
   const pricing = computePricing({
     boqRows: dedupe,
-    materials: extract.materials?.length ? extract.materials : base.materials,
-    labor: extract.labor?.length ? extract.labor : base.labor,
+    materials: consolidated.materials?.length ? consolidated.materials : base.materials,
+    labor: consolidated.labor?.length ? consolidated.labor : base.labor,
     financialAdjustments: base.financialAdjustments ?? undefined,
   })
 
@@ -91,16 +109,13 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
       takeoffNotes: extract.takeoffNotes || base.drawingAnalysis.takeoffNotes,
     },
     boqItems: dedupe,
-    materials: extract.materials?.length
-      ? normalizeMaterialState(
-        extract.materials.map((m, i) => ({ ...m, id: m.id ?? Date.now() + i })),
-        extract.matCategories?.length ? extract.matCategories : base.matCategories,
-      ).materials
+    materials: consolidated.materials?.length
+      ? consolidated.materials
       : base.materials,
-    matCategories: extract.materials?.length
-      ? normalizeMaterialState(extract.materials, extract.matCategories || base.matCategories).categories
+    matCategories: consolidated.matCategories?.length
+      ? consolidated.matCategories
       : (base.matCategories || []),
-    labor: extract.labor?.length ? extract.labor.map((l, i) => ({ ...l, id: l.id ?? Date.now() + i })) : base.labor,
+    labor: consolidated.labor?.length ? consolidated.labor : base.labor,
     assumptions: extract.assumptions?.length ? extract.assumptions : base.assumptions,
     exclusions: extract.exclusions?.length ? extract.exclusions : base.exclusions,
     provisional: extract.provisional?.length ? extract.provisional : base.provisional,

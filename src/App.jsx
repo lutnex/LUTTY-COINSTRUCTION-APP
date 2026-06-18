@@ -30,7 +30,8 @@ import { useDocGen } from './hooks/useDocGen.js'
 import { buildBOQReviewPrompt, normalizePromptInput } from './utils/promptBuilder.js'
 import { serializeBOQ, saveDocGenDraft } from './utils/boqWorkflow.js'
 import { mergeExtractIntoProjectData, projectDataToDocPayload, intelligenceToProjectPatch, emptyProjectData } from './utils/projectIntelligence.js'
-import { applyPresentationStyle, PRESENTATION_STYLES } from './utils/qsWorkflow.js'
+import { buildWorkflowDocPayload, PRESENTATION_STYLES } from './utils/qsWorkflow.js'
+import { extractImportSummary } from './utils/chatExtract.js'
 import { PRICING_SOURCE_MODES, PRICING_SOURCE_OPTIONS } from './utils/priceProfileTypes.js'
 import {
   WORKFLOW_ACTIONS,
@@ -593,25 +594,32 @@ function AppShellInner({ projState, dispatch }) {
   const handleQSExport = useCallback(({ presentationStyle, priceInputs, rows, assumptions, exclusions, workflowMeta }) => {
     const tid = toast.loading('Exporting to Document Generator…')
     try {
-      const merged = mergeExtractIntoProjectData(intelligence.data, {
-        boqRows: rows,
-        assumptions,
-        exclusions,
-        userApprovedPricing: true,
-      }, { replaceBoq: true })
+      const merged = intelligence.recomputePricing(
+        mergeExtractIntoProjectData(intelligence.data, {
+          boqRows: rows,
+          assumptions,
+          exclusions,
+          userApprovedPricing: true,
+        }, { replaceBoq: true }),
+      )
       merged.workflow = { presentationStyle, approvedAt: new Date().toISOString(), ...workflowMeta }
-      intelligence.setData(intelligence.recomputePricing(merged))
-      let payload = projectDataToDocPayload(merged, {
-        docType: rows?.length ? 'boq' : 'estimate',
-        source: 'qs-workflow',
+      intelligence.setData(merged)
+      const payload = buildWorkflowDocPayload(merged, {
+        presentationStyle,
+        priceInputs,
+        workflowMeta,
       })
-      payload = applyPresentationStyle(payload, presentationStyle)
       saveDocGenDraft(payload)
       const ok = docGen.applyBOQTransfer(payload)
       if (!ok) throw new Error('Transfer failed')
       setQsWorkflowOpen(false)
       setTab('docgen')
-      toast.done(tid, 'Approved export sent to Document Generator', `${rows.length} items · ${presentationStyle === 'premium' ? 'Premium Quotation' : 'Detailed BOQ'}`)
+      const summary = extractImportSummary({
+        boqRows: payload.boqRows,
+        materials: payload.materials,
+        labor: payload.labor,
+      })
+      toast.done(tid, 'Full document sent to Document Generator', `${summary} · ${presentationStyle === 'premium' ? 'Premium Quotation' : 'Detailed BOQ'}`)
     } catch (e) {
       toast.fail(tid, 'Export failed', e.message)
     }
@@ -849,8 +857,7 @@ function AppShellInner({ projState, dispatch }) {
             return { ok: false }
           }
           const merged = applyExtractNow(extract, { replaceBoq: true })
-          const count = ensureBoqRows(extract).length || merged.boqItems?.length || 0
-          toast.success('Imported to BOQ Builder', `${count} lines with assumptions and notes`)
+          toast.success('Imported to BOQ Builder', extractImportSummary(extract) || `${merged.boqItems?.length || 0} lines with assumptions and notes`)
           return { navigate: 'boq' }
         }
 
@@ -1041,7 +1048,8 @@ function AppShellInner({ projState, dispatch }) {
     } catch (e) {
       console.error('[export] download failed:', e)
       const msg = e.message || 'Try Preview then Print'
-      toast.fail(tid, msg.startsWith('Export blocked') ? 'Incomplete document' : 'Export failed', msg)
+      const incomplete = msg.includes('PDF export incomplete') || msg.startsWith('Export blocked')
+      toast.fail(tid, incomplete ? 'Incomplete export' : 'Export failed', msg)
     }
     setPdfStatus(null)
   }, [docGen, buildExportData, toast])
