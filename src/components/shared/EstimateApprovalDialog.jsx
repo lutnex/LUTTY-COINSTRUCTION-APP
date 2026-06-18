@@ -4,6 +4,7 @@ import { Button } from './Button.jsx'
 import { APPROVAL_MODES } from '../../utils/projectEstimate.js'
 import { BREAKDOWN_LABELS, DIRECT_COST_ONLY_KEYS } from '../../services/pricing/directCostBreakdown.js'
 import { fmtN } from '../../utils/formatters.js'
+import MaterialAuditDialog from './MaterialAuditDialog.jsx'
 
 const MODE_OPTIONS = [
   { id: APPROVAL_MODES.DIRECT_ONLY, label: 'Direct Cost Only', desc: 'Materials + Labour + Earthworks + Filling + Transport + Preliminaries only.' },
@@ -22,9 +23,11 @@ export default function EstimateApprovalDialog({
   onConfirm,
   directCostTotal = 0,
   breakdown = null,
+  materialAudit = null,
   title = 'Approve Estimate',
   subtitle = 'Use Direct Cost Only or Include Commercials?',
 }) {
+  const [materialAuditOpen, setMaterialAuditOpen] = useState(false)
   const [selected, setSelected] = useState([APPROVAL_MODES.DIRECT_ONLY])
   const [customPercentages, setCustomPercentages] = useState({
     contingency: '',
@@ -159,6 +162,18 @@ export default function EstimateApprovalDialog({
               ))}
             </div>
           )}
+          {materialAudit && (
+            <div style={{ marginTop: 12 }}>
+              <Button variant="ghost" onClick={() => setMaterialAuditOpen(true)}>
+                Show Material Audit
+              </Button>
+              {Math.abs(materialAudit.difference) > 0.02 && (
+                <span style={{ fontSize: 10, color: '#F0A090', marginLeft: 10 }}>
+                  Materials differ by GHS {fmtN(materialAudit.difference)} from import
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
@@ -219,6 +234,12 @@ export default function EstimateApprovalDialog({
           <Button variant="primary" onClick={handleConfirm}>Approve &amp; Lock Estimate</Button>
         </div>
       </div>
+
+      <MaterialAuditDialog
+        open={materialAuditOpen}
+        onClose={() => setMaterialAuditOpen(false)}
+        audit={materialAudit}
+      />
     </div>
   )
 }

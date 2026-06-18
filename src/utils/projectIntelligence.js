@@ -7,6 +7,7 @@ import { buildProjectEstimate, ESTIMATE_SOURCES } from './projectEstimate.js'
 import { resolveInitialPaymentTerms, normalizePaymentTerms } from './paymentTerms.js'
 import { normalizeMaterialState } from './materialCategories.js'
 import { consolidateExtractForImport } from './chatExtract.js'
+import { buildImportBaselineFromExtract } from './materialAudit.js'
 
 export const INTELLIGENCE_STORAGE_KEY = 'constructiq-project-intelligence'
 
@@ -42,6 +43,7 @@ export function emptyProjectData() {
     summaries: { commercial: '' },
     financialAdjustments: null,
     projectEstimate: null,
+    importBaseline: null,
     metadata: { source: null, updatedAt: null, version: 1 },
   }
 }
@@ -100,6 +102,19 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
   if (extract.exclusions?.length) notesParts.push('EXCLUSIONS:\n' + extract.exclusions.join('\n'))
   if (extract.takeoffNotes) notesParts.push('DRAWING TAKEOFF:\n' + extract.takeoffNotes)
 
+  const resolvedMaterials = consolidated.materials?.length
+    ? consolidated.materials
+    : base.materials
+  const materials = (resolvedMaterials || []).map(m => ({
+    ...m,
+    source: m.source || (consolidated.materials?.length ? 'ai-chat' : 'carried-forward'),
+  }))
+
+  const nextBaseline = buildImportBaselineFromExtract(extract)
+  const importBaseline = nextBaseline
+    ? nextBaseline
+    : (replaceBoq ? null : (base.importBaseline || null))
+
   return {
     ...base,
     client: {
@@ -118,9 +133,7 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
       takeoffNotes: extract.takeoffNotes || base.drawingAnalysis.takeoffNotes,
     },
     boqItems: dedupe,
-    materials: consolidated.materials?.length
-      ? consolidated.materials
-      : base.materials,
+    materials,
     matCategories: consolidated.matCategories?.length
       ? consolidated.matCategories
       : (base.matCategories || []),
@@ -132,6 +145,7 @@ export function mergeExtractIntoProjectData(prev, extract, { replaceBoq = false 
     collections: extract.collections?.length ? extract.collections : base.collections,
     pricing,
     projectEstimate,
+    importBaseline,
     summaries: {
       commercial: extract.contractSum
         ? `Contract sum: GHS ${Number(extract.contractSum).toLocaleString('en')}`

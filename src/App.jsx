@@ -76,6 +76,7 @@ import { fetchMaterialPrices } from './services/materialPricesService.js'
 import { saveAppSession, loadAppSession, clearAppSession } from './utils/sessionStore.js'
 import { downloadPDF, printDocument, buildDocumentHTML } from './services/ai/pdfEngine.js'
 import { buildApprovalBreakdown } from './services/pricing/directCostBreakdown.js'
+import { buildMaterialAudit } from './utils/materialAudit.js'
 import EstimateApprovalDialog from './components/shared/EstimateApprovalDialog.jsx'
 import {
   lockProjectEstimate,
@@ -560,6 +561,16 @@ function AppShellInner({ projState, dispatch }) {
   }, [intelligence])
 
   const chat = useChat({ prices, onUsage: handleUsage, onExtract: handleAIExtract })
+
+  const estimateMaterialAudit = useMemo(() => {
+    if (!estimateApprovalOpen) return null
+    const input = estimateApprovalInput ?? getEstimateInput()
+    return buildMaterialAudit({
+      materials: input.materials,
+      importBaseline: intelligence.data?.importBaseline,
+      chatExtractFallback: getLastChatExtract(chat.msgs),
+    })
+  }, [estimateApprovalOpen, estimateApprovalInput, getEstimateInput, intelligence.data?.importBaseline, chat.msgs])
 
   const session = useWorkspaceSession({
     tab,
@@ -1871,6 +1882,7 @@ function AppShellInner({ projState, dispatch }) {
         onConfirm={handleEstimateApprovalConfirm}
         directCostTotal={estimateApprovalBreakdown?.directTotal ?? 0}
         breakdown={estimateApprovalBreakdown}
+        materialAudit={estimateMaterialAudit}
       />
     </div>
   )

@@ -15,6 +15,7 @@ import {
   ESTIMATE_MISMATCH_MESSAGE,
 } from '../src/utils/projectEstimate.js'
 import { buildApprovalBreakdown } from '../src/services/pricing/directCostBreakdown.js'
+import { buildMaterialAudit, buildImportBaselineFromExtract } from '../src/utils/materialAudit.js'
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -200,6 +201,43 @@ test('BOQ bill rows matching material schedule total do not inflate Other', () =
   assert(breakdown.categories.other === 0, `Other must be 0, got ${breakdown.categories.other}`)
   assert(Math.abs(breakdown.categories.materials - 69617) < 0.02)
   assert(Math.abs(breakdown.directTotal - 69617) < 0.02)
+})
+
+test('material audit flags extra rows causing schedule difference', () => {
+  const baseline = buildImportBaselineFromExtract({
+    materials: [
+      { desc: 'Cement 42.5R', unit: 'bag', qty: '100', rate: '65', amount: 6500 },
+      { desc: 'Sandcrete blocks', unit: 'nr', qty: '500', rate: '12', amount: 6000 },
+    ],
+    contractSum: 94201,
+  })
+  assert(Math.abs(baseline.materialTotal - 12500) < 0.02)
+
+  const audit = buildMaterialAudit({
+    materials: [
+      ...baseline.materials,
+      { desc: 'Extra roof sheets', unit: 'sheet', qty: '10', rate: '506.5', amount: 5065, source: 'carried-forward' },
+    ],
+    importBaseline: baseline,
+  })
+  assert(Math.abs(audit.difference - 5065) < 0.02, `expected diff 5065, got ${audit.difference}`)
+  assert(audit.flaggedRows.some(r => r.flags.includes('extra')), 'should flag extra row')
+  assert(Math.abs(audit.flaggedDeltaSum - 5065) < 0.02)
+})
+
+test('material audit detects duplicate imported rows', () => {
+  const baseline = buildImportBaselineFromExtract({
+    materials: [{ desc: 'Cement bags', unit: 'bag', qty: '50', rate: '100', amount: 5000 }],
+  })
+  const audit = buildMaterialAudit({
+    materials: [
+      { desc: 'Cement bags', unit: 'bag', qty: '50', rate: '100', amount: 5000, source: 'ai-chat' },
+      { desc: 'Cement bags', unit: 'bag', qty: '50', rate: '100', amount: 5000, source: 'duplicate' },
+    ],
+    importBaseline: baseline,
+  })
+  assert(audit.summary.duplicate >= 1, 'should detect duplicate')
+  assert(Math.abs(audit.difference - 5000) < 0.02)
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)
